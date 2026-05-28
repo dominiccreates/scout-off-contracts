@@ -7,6 +7,8 @@ use types::{DataKey, PlayerProfile, PlayerVitals, ProgressLevel, ScoutProfile};
 
 use soroban_sdk::{contract, contractimpl, Address, Env, String, Vec};
 
+const MAX_REGION_LEN: u32 = 128;
+
 #[contract]
 pub struct RegistrationContract;
 
@@ -122,6 +124,10 @@ impl RegistrationContract {
         Self::require_not_paused(&env)?;
         Self::require_initialized(&env)?;
         wallet.require_auth();
+
+        if region.len() > MAX_REGION_LEN {
+            return Err(ScoutChainError::InvalidInput);
+        }
 
         if env
             .storage()
@@ -321,5 +327,29 @@ mod tests {
         client.register_player(&wallet, &vitals, &hashes);
         // second call should panic with AlreadyRegistered
         client.register_player(&wallet, &vitals, &hashes);
+    }
+
+    #[test]
+    fn test_register_scout_region_128_bytes_succeeds() {
+        let (env, client) = setup();
+        let admin = Address::generate(&env);
+        client.initialize(&admin);
+
+        let wallet = Address::generate(&env);
+        let region = String::from_str(&env, &"a".repeat(128));
+        let scout_id = client.register_scout(&wallet, &region);
+        assert_eq!(scout_id, 1);
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_register_scout_region_129_bytes_fails() {
+        let (env, client) = setup();
+        let admin = Address::generate(&env);
+        client.initialize(&admin);
+
+        let wallet = Address::generate(&env);
+        let region = String::from_str(&env, &"a".repeat(129));
+        client.register_scout(&wallet, &region);
     }
 }
