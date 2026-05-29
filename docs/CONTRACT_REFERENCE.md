@@ -100,7 +100,7 @@ Handles scout subscriptions, pay-to-contact, and trial offer logging.
 | `scout_registered` | registration | New scout profile created |
 | `profile_updated` | registration | Player updates IPFS content hashes |
 | `milestone_approved` | verification | Validator confirms a player achievement |
-| `progress_updated` | progress | Player advances to a new level |
+| `progress_updated` | progress | Player advances to a new level (data: `player_id`, `new_level`, `milestone_ref`) |
 | `scout_subscribed` | scout_access | Scout purchases a subscription |
 | `player_contacted` | scout_access | Scout pays to unlock player contact |
 | `trial_offer_logged` | scout_access | Scout records a trial offer |

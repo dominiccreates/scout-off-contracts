@@ -102,7 +102,7 @@ impl ProgressContract {
             .persistent()
             .set(&DataKey::PlayerLevel(player_id), &new_level);
 
-        events::progress_updated(&env, player_id, &new_level, &caller);
+        events::progress_updated(&env, player_id, &new_level, &caller, milestone_ref);
         Ok(new_level)
     }
 
@@ -199,6 +199,23 @@ mod tests {
         let id = env.register_contract(None, ProgressContract);
         let client = ProgressContractClient::new(&env, &id);
         (env, client)
+    }
+
+    #[test]
+    fn test_progress_updated_event_includes_milestone_ref() {
+        let (env, client) = setup();
+        let admin = Address::generate(&env);
+        client.initialize(&admin);
+        let validator = Address::generate(&env);
+        let player_id = 1u64;
+        let milestone_ref = 42u32;
+        client.advance_level(&validator, &player_id, &milestone_ref);
+        let events = env.events().all();
+        // Last event is progress_updated; data tuple is (player_id, new_level, milestone_ref)
+        let (_, data) = events.last().unwrap();
+        let (_, _, emitted_ref): (u64, ProgressLevel, u32) =
+            soroban_sdk::FromVal::from_val(&env, &data);
+        assert_eq!(emitted_ref, milestone_ref);
     }
 
     #[test]
