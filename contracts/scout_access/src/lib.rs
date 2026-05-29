@@ -75,6 +75,16 @@ impl ScoutAccessContract {
         Ok(())
     }
 
+    /// Register the progress contract address so log_trial_offer can
+    /// atomically advance the player to Level 3 (admin only).
+    pub fn set_progress_contract(env: Env, addr: Address) -> Result<(), ScoutAccessError> {
+        Self::require_admin(&env)?;
+        env.storage()
+            .instance()
+            .set(&DataKey::ProgressContract, &addr);
+        Ok(())
+    }
+
     // -------------------------------------------------------------------------
     // Scout subscription
     // -------------------------------------------------------------------------
@@ -212,6 +222,23 @@ impl ScoutAccessContract {
             .extend_ttl(&counter_key, TRIAL_TTL_THRESHOLD, TRIAL_TTL_EXTEND_TO);
 
         events::trial_offer_logged(&env, player_id, &scout);
+
+        // Atomically advance the player to Level 3 if the progress contract
+        // is configured. AlreadyAtMaxLevel is silently ignored; any other
+        // failure is a hard error.
+        if let Some(progress_addr) = env
+            .storage()
+            .instance()
+            .get::<DataKey, Address>(&DataKey::ProgressContract)
+        {
+            let progress_client = progress_contract::Client::new(&env, &progress_addr);
+            match progress_client.try_advance_level(&scout, &player_id, &next_index) {
+                Ok(_) => {}
+                Err(Ok(progress_contract::Error::AlreadyAtMaxLevel)) => {}
+                Err(_) => return Err(ScoutAccessError::ProgressCallFailed),
+            }
+        }
+
         Ok(next_index)
     }
 
