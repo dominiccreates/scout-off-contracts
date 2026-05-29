@@ -579,4 +579,23 @@ mod tests {
         // This should panic with Overflow error
         client.register_scout(&wallet, &region);
     }
+
+    // -------------------------------------------------------------------------
+    // Issue #22: pause_contract blocking register_scout
+    // -------------------------------------------------------------------------
+
+    #[test]
+    #[should_panic]
+    fn test_register_scout_blocked_when_paused() {
+        let (env, client) = setup();
+        let admin = Address::generate(&env);
+        client.initialize(&admin);
+
+        client.pause_contract();
+
+        let wallet = Address::generate(&env);
+        let region = String::from_str(&env, "Europe");
+        // This should panic with ContractPaused error
+        client.register_scout(&wallet, &region);
+    }
 }
