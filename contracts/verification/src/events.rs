@@ -1,9 +1,20 @@
 use soroban_sdk::{Address, Env, Symbol};
 
-pub fn milestone_approved(env: &Env, player_id: u64, validator: &Address) {
+pub fn milestone_approved(
+    env: &Env,
+    player_id: u64,
+    validator: &Address,
+    milestone_index: u32,
+    description: &String,
+    evidence_hash: &String,
+) {
     env.events().publish(
-        (Symbol::new(env, "milestone_approved"), validator.clone()),
-        player_id,
+        (
+            Symbol::new(env, "milestone_approved"),
+            validator.clone(),
+            milestone_index,
+        ),
+        (player_id, description.clone(), evidence_hash.clone()),
     );
 }
 
