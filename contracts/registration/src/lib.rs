@@ -84,7 +84,7 @@ impl RegistrationContract {
             return Err(ScoutChainError::InvalidInput);
         }
 
-        let player_id = Self::next_player_id(&env);
+        let player_id = Self::next_player_id(&env)?;
         let now = env.ledger().timestamp();
 
         let profile = PlayerProfile {
@@ -129,6 +129,20 @@ impl RegistrationContract {
         Ok(())
     }
 
+    /// Deregister a player profile (admin only, GDPR right-to-erasure).
+    pub fn deregister_player(env: Env, player_id: u64) -> Result<(), ScoutChainError> {
+        Self::require_admin(&env)?;
+        let profile = Self::load_player(&env, player_id)?;
+        env.storage()
+            .persistent()
+            .remove(&DataKey::Player(player_id));
+        env.storage()
+            .persistent()
+            .remove(&DataKey::PlayerByWallet(profile.wallet));
+        events::player_deregistered(&env, player_id);
+        Ok(())
+    }
+
     // -------------------------------------------------------------------------
     // Scout registration
     // -------------------------------------------------------------------------
@@ -155,7 +169,7 @@ impl RegistrationContract {
             return Err(ScoutChainError::InvalidInput);
         }
 
-        let scout_id = Self::next_scout_id(&env);
+        let scout_id = Self::next_scout_id(&env)?;
         let profile = ScoutProfile {
             scout_id,
             wallet: wallet.clone(),
@@ -283,30 +297,30 @@ impl RegistrationContract {
             .ok_or(ScoutChainError::PlayerNotFound)
     }
 
-    fn next_player_id(env: &Env) -> u64 {
+    fn next_player_id(env: &Env) -> Result<u64, ScoutChainError> {
         let id: u64 = env
             .storage()
             .instance()
             .get(&DataKey::PlayerCounter)
             .unwrap_or(0u64);
-        let next = id.checked_add(1).expect("overflow");
+        let next = id.checked_add(1).ok_or(ScoutChainError::Overflow)?;
         env.storage()
             .instance()
             .set(&DataKey::PlayerCounter, &next);
-        next
+        Ok(next)
     }
 
-    fn next_scout_id(env: &Env) -> u64 {
+    fn next_scout_id(env: &Env) -> Result<u64, ScoutChainError> {
         let id: u64 = env
             .storage()
             .instance()
             .get(&DataKey::ScoutCounter)
             .unwrap_or(0u64);
-        let next = id.checked_add(1).expect("overflow");
+        let next = id.checked_add(1).ok_or(ScoutChainError::Overflow)?;
         env.storage()
             .instance()
             .set(&DataKey::ScoutCounter, &next);
-        next
+        Ok(next)
     }
 }
 
