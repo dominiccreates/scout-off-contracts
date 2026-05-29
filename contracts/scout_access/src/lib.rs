@@ -7,6 +7,12 @@ use types::{DataKey, FeeConfig, Subscription, SubscriptionTier, TrialOffer};
 
 use soroban_sdk::{contract, contractimpl, token, Address, Env, String};
 
+mod progress_contract {
+    soroban_sdk::contractimport!(
+        file = "../../target/wasm32-unknown-unknown/release/scoutchain_progress.wasm"
+    );
+}
+
 #[contract]
 pub struct ScoutAccessContract;
 
@@ -68,6 +74,16 @@ impl ScoutAccessContract {
     pub fn unpause_contract(env: Env) -> Result<(), ScoutAccessError> {
         Self::require_admin(&env)?;
         env.storage().instance().set(&DataKey::Paused, &false);
+        Ok(())
+    }
+
+    /// Register the progress contract address so log_trial_offer can
+    /// atomically advance the player to Level 3 (admin only).
+    pub fn set_progress_contract(env: Env, addr: Address) -> Result<(), ScoutAccessError> {
+        Self::require_admin(&env)?;
+        env.storage()
+            .instance()
+            .set(&DataKey::ProgressContract, &addr);
         Ok(())
     }
 
@@ -190,6 +206,23 @@ impl ScoutAccessContract {
         env.storage().persistent().set(&counter_key, &next_index);
 
         events::trial_offer_logged(&env, player_id, &scout);
+
+        // Atomically advance the player to Level 3 if the progress contract
+        // is configured. AlreadyAtMaxLevel is silently ignored; any other
+        // failure is a hard error.
+        if let Some(progress_addr) = env
+            .storage()
+            .instance()
+            .get::<DataKey, Address>(&DataKey::ProgressContract)
+        {
+            let progress_client = progress_contract::Client::new(&env, &progress_addr);
+            match progress_client.try_advance_level(&scout, &player_id, &next_index) {
+                Ok(_) => {}
+                Err(Ok(progress_contract::Error::AlreadyAtMaxLevel)) => {}
+                Err(_) => return Err(ScoutAccessError::ProgressCallFailed),
+            }
+        }
+
         Ok(next_index)
     }
 
@@ -474,5 +507,81 @@ mod tests {
 
         // Should panic with SubscriptionExpired
         client.pay_to_contact(&scout, &1u64);
+    }
+
+    // -------------------------------------------------------------------------
+    // Cross-contract: progress.advance_level
+    // -------------------------------------------------------------------------
+
+    /// Helper: deploy a real ProgressContract and return its address.
+    fn deploy_progress(env: &Env) -> Address {
+        use scoutchain_progress::ProgressContract;
+        let admin = Address::generate(env);
+        let id = env.register_contract(None, ProgressContract);
+        let pc = scoutchain_progress::ProgressContractClient::new(env, &id);
+        pc.initialize(&admin);
+        id
+    }
+
+    #[test]
+    fn test_log_trial_offer_advances_level_via_progress_contract() {
+        let (env, admin, xlm, _contract_id, client) = setup();
+
+        let progress_id = deploy_progress(&env);
+        client.set_progress_contract(&progress_id);
+
+        let scout = Address::generate(&env);
+        mint_token(&env, &xlm, &admin, &scout, 100_000_000);
+        client.subscribe(&scout, &SubscriptionTier::Elite);
+
+        let idx = client.log_trial_offer(&scout, &1u64, &String::from_str(&env, "QmHash"));
+        assert_eq!(idx, 1);
+
+        // Player should now be at Level 1 (VerifiedIdentity) — advance_level
+        // moves from Unverified → VerifiedIdentity on the first call.
+        let pc = scoutchain_progress::ProgressContractClient::new(&env, &progress_id);
+        assert_eq!(pc.get_level(&1u64), scoutchain_progress::ProgressLevel::VerifiedIdentity);
+    }
+
+    #[test]
+    fn test_log_trial_offer_silent_when_already_at_max_level() {
+        let (env, admin, xlm, _contract_id, client) = setup();
+
+        let progress_id = deploy_progress(&env);
+        client.set_progress_contract(&progress_id);
+
+        // Advance the player to EliteTier manually (3 calls).
+        let pc = scoutchain_progress::ProgressContractClient::new(&env, &progress_id);
+        let caller = Address::generate(&env);
+        pc.advance_level(&caller, &1u64, &1u32);
+        pc.advance_level(&caller, &1u64, &2u32);
+        pc.advance_level(&caller, &1u64, &3u32);
+        assert_eq!(pc.get_level(&1u64), scoutchain_progress::ProgressLevel::EliteTier);
+
+        let scout = Address::generate(&env);
+        mint_token(&env, &xlm, &admin, &scout, 100_000_000);
+        client.subscribe(&scout, &SubscriptionTier::Elite);
+
+        // AlreadyAtMaxLevel must be silently ignored — log_trial_offer succeeds.
+        let idx = client.log_trial_offer(&scout, &1u64, &String::from_str(&env, "QmHash"));
+        assert_eq!(idx, 1);
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #14)")]
+    fn test_log_trial_offer_returns_progress_call_failed_on_other_error() {
+        let (env, admin, xlm, _contract_id, client) = setup();
+
+        // Point to a non-existent / uninitialized contract address so the
+        // cross-contract call fails with a system/invoke error.
+        let bad_addr = Address::generate(&env);
+        client.set_progress_contract(&bad_addr);
+
+        let scout = Address::generate(&env);
+        mint_token(&env, &xlm, &admin, &scout, 100_000_000);
+        client.subscribe(&scout, &SubscriptionTier::Elite);
+
+        // Must panic with ProgressCallFailed (#14).
+        client.log_trial_offer(&scout, &1u64, &String::from_str(&env, "QmHash"));
     }
 }
