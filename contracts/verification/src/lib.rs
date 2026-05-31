@@ -225,7 +225,7 @@ impl VerificationContract {
         env.storage()
             .persistent()
             .get(&DataKey::Milestone(player_id, index))
-            .ok_or(VerificationError::InvalidInput)
+            .ok_or(VerificationError::MilestoneNotFound)
     }
 
     pub fn get_milestone_count(env: Env, player_id: u64) -> u32 {
@@ -526,5 +526,18 @@ mod tests {
 
         let unknown = Address::generate(&env);
         client.get_validator(&unknown);
+    }
+
+    #[test]
+    fn test_get_milestone_not_found_returns_milestone_not_found() {
+        let (env, client) = setup();
+        let admin = Address::generate(&env);
+        client.initialize(&admin);
+
+        let result = client.try_get_milestone(&1u64, &99);
+        assert_eq!(
+            result,
+            Err(Ok(VerificationError::MilestoneNotFound))
+        );
     }
 }

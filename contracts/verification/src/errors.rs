@@ -13,5 +13,8 @@ pub enum VerificationError {
     ValidatorAlreadyRegistered = 7,
     PlayerNotFound = 8,
     InvalidInput = 9,
+    ProgressCallFailed = 10,
+    AlreadyConfigured = 11,
+    MilestoneNotFound = 12,
     Overflow = 13,
 }
