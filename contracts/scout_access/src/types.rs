@@ -68,4 +68,6 @@ pub enum DataKey {
     TrialOffer(u64, u32),
     /// progress contract address for cross-contract advance_level call
     ProgressContract,
+    /// registration contract address for optional player validation
+    RegistrationContract,
 }
