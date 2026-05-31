@@ -279,4 +279,23 @@ mod tests {
         env.mock_auths(&[]);
         client.pause_contract();
     }
+
+    #[test]
+    fn test_history_count_increments_correctly() {
+        let (env, client) = setup();
+        let admin = Address::generate(&env);
+        client.initialize(&admin);
+
+        let validator = Address::generate(&env);
+        let player_id = 1u64;
+
+        client.advance_level(&validator, &player_id, &1u32);
+        assert_eq!(client.get_history_count(&player_id), 1);
+
+        client.advance_level(&validator, &player_id, &2u32);
+        assert_eq!(client.get_history_count(&player_id), 2);
+
+        client.advance_level(&validator, &player_id, &3u32);
+        assert_eq!(client.get_history_count(&player_id), 3);
+    }
 }
