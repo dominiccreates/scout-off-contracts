@@ -86,6 +86,7 @@ impl ScoutAccessContract {
         env.storage().instance().set(&DataKey::Initialized, &true);
         env.storage().instance().set(&DataKey::Paused, &false);
         env.storage().instance().set(&DataKey::AccumulatedFees, &0i128);
+        events::contract_initialized(&env, &admin);
         Ok(())
     }
 
@@ -460,9 +461,9 @@ impl ScoutAccessContract {
 mod tests {
     use super::*;
     use soroban_sdk::{
-        testutils::{Address as _, Ledger, MockAuth, MockAuthInvoke},
+        testutils::{Address as _, Events, Ledger, MockAuth, MockAuthInvoke},
         token::{Client as TokenClient, StellarAssetClient},
-        Env, IntoVal, String,
+        Env, IntoVal, String, Symbol,
     };
 
     /// Deploy a mock SAC token, mint `amount` to `to`, return the token contract address.
@@ -494,6 +495,37 @@ mod tests {
         let client = ScoutAccessContractClient::new(&env, &contract_id);
         client.initialize(&admin, &xlm, &default_fees());
         (env, admin, xlm, contract_id, client)
+    }
+
+    #[test]
+    fn test_initialize_event() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let admin = Address::generate(&env);
+        let xlm = create_token(&env, &admin);
+        let contract_id = env.register_contract(None, ScoutAccessContract);
+        let client = ScoutAccessContractClient::new(&env, &contract_id);
+
+        client.initialize(&admin, &xlm, &default_fees());
+
+        let events = env.events().all();
+        let last_event = events.get(events.len() - 1);
+        
+        assert_eq!(
+            last_event,
+            (
+                contract_id.clone(),
+                (Symbol::new(&env, "contract_initialized"), admin.clone()).into_val(&env),
+                admin.clone().into_val(&env)
+            )
+        );
+
+        // Duplicate initialize should fail and NOT emit event
+        let res = client.try_initialize(&admin, &xlm, &default_fees());
+        assert_eq!(res, Err(Ok(ScoutAccessError::AlreadyInitialized)));
+        
+        let events_after = env.events().all();
+        assert_eq!(events.len(), events_after.len());
     }
 
     #[test]
