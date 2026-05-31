@@ -40,4 +40,6 @@ pub enum DataKey {
     RegistrationContract,
     /// milestone count per validator wallet
     ValidatorMilestoneCount(Address),
+    /// flag: set_progress_contract has been called
+    ProgressContractSet,
 }

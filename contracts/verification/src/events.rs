@@ -31,3 +31,10 @@ pub fn validator_revoked(env: &Env, wallet: &Address) {
         wallet.clone(),
     );
 }
+
+pub fn progress_contract_updated(env: &Env, new_contract: &Address) {
+    env.events().publish(
+        (Symbol::new(env, "progress_contract_updated"),),
+        new_contract.clone(),
+    );
+}
