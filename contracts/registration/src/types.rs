@@ -61,4 +61,5 @@ pub enum DataKey {
     PlayerByWallet(Address),
     Scout(u64),
     ScoutByWallet(Address),
+ ValidatorVector,   
 }

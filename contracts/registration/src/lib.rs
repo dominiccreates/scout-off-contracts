@@ -128,7 +128,12 @@ impl RegistrationContract {
         events::profile_updated(&env, player_id);
         Ok(())
     }
-
+pub fn get_validators(env: Env) -> Vec<Address> {
+    env.storage()
+        .persistent()
+        .get(&DataKey::ValidatorVector)
+        .unwrap_or_else(|| Vec::new(&env))
+}
     // -------------------------------------------------------------------------
     // Scout registration
     // -------------------------------------------------------------------------
