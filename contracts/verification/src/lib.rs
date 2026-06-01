@@ -299,14 +299,13 @@ impl VerificationContract {
             .get::<DataKey, Address>(&DataKey::ProgressContract)
         {
             let progress_client = progress_contract::Client::new(&env, &progress_addr);
-            // advance_level will return AlreadyAtMaxLevel if the player is
-            // already at EliteTier — we intentionally ignore that error here
-            // so the milestone is still recorded even at max level.
-            let _ = progress_client.try_advance_level(
-                &validator_wallet,
-                &player_id,
-                &next_index,
-            );
+            // AlreadyAtMaxLevel (6) is acceptable — milestone still recorded.
+            // Any other error propagates as ProgressCallFailed.
+            match progress_client.try_advance_level(&validator_wallet, &player_id, &next_index) {
+                Ok(_) => {}
+                Err(Ok(progress_contract::Error::AlreadyAtMaxLevel)) => {}
+                Err(_) => return Err(VerificationError::ProgressCallFailed),
+            }
         }
 
         Ok(next_index)
