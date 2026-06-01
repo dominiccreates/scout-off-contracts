@@ -516,6 +516,20 @@ mod tests {
     }
 
     #[test]
+    fn test_subscribe_pro_tier() {
+        let (env, admin, xlm, _contract_id, client) = setup();
+        let scout = Address::generate(&env);
+        mint_token(&env, &xlm, &admin, &scout, 10_000_000);
+
+        client.subscribe(&scout, &SubscriptionTier::Pro);
+
+        let sub = client.get_subscription(&scout);
+        assert_eq!(sub.tier, SubscriptionTier::Pro);
+        assert!(sub.expires_at > sub.subscribed_at);
+        assert_eq!(client.get_accumulated_fees(), 3_000_000);
+    }
+
+    #[test]
     fn test_scout_subscribed_event_includes_fee_paid() {
         let (env, admin, xlm, _contract_id, client) = setup();
         let scout = Address::generate(&env);
