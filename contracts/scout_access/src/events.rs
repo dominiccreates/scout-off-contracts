@@ -28,3 +28,17 @@ pub fn fees_withdrawn(env: &Env, to: &Address, amount: i128) {
         amount,
     );
 }
+
+pub fn contract_paused(env: &Env, admin: &Address) {
+    env.events().publish(
+        (Symbol::new(env, "contract_paused"),),
+        admin.clone(),
+    );
+}
+
+pub fn contract_unpaused(env: &Env, admin: &Address) {
+    env.events().publish(
+        (Symbol::new(env, "contract_unpaused"),),
+        admin.clone(),
+    );
+}
