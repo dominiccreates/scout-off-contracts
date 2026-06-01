@@ -45,3 +45,17 @@ pub fn contract_unpaused(env: &Env, admin: &Address) {
         admin.clone(),
     );
 }
+
+pub fn contract_initialized(env: &Env, admin: &Address) {
+    env.events().publish(
+        (Symbol::new(env, "contract_initialized"),),
+        admin.clone(),
+    );
+}
+
+pub fn progress_contract_updated(env: &Env, progress_contract: &Address) {
+    env.events().publish(
+        (Symbol::new(env, "progress_contract_updated"),),
+        progress_contract.clone(),
+    );
+}

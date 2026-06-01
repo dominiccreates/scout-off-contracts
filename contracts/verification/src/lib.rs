@@ -16,7 +16,7 @@ mod events;
 mod types;
 
 use errors::VerificationError;
-use types::{ContractHealth, DataKey, Milestone, Validator};
+use types::{ContractHealth, DataKey, Milestone, Validator, ValidatorStatus};
 
 use soroban_sdk::{contract, contractimpl, Address, Env, String};
 
@@ -70,6 +70,7 @@ impl VerificationContract {
         env.storage().instance().set(&DataKey::Admin, &admin);
         env.storage().instance().set(&DataKey::Initialized, &true);
         env.storage().instance().set(&DataKey::Paused, &false);
+        events::contract_initialized(&env, &admin);
         Ok(())
     }
 
@@ -458,7 +459,7 @@ mod tests {
     #[test]
     fn test_health_false_before_initialize() {
         let (_env, client) = setup();
-        assert!(!client.health());
+        assert!(!client.health().initialized);
     }
 
     #[test]
@@ -776,5 +777,40 @@ mod tests {
         client.register_validator(&validator, &String::from_str(&env, &exactly_256));
 
         assert!(client.is_active_validator(&validator));
+    }
+
+    #[test]
+    fn test_initialize_emits_contract_initialized_event() {
+        let (env, client) = setup();
+        let admin = Address::generate(&env);
+        client.initialize(&admin);
+
+        let events = env.events().all();
+        assert_eq!(
+            events,
+            soroban_sdk::vec![
+                &env,
+                (
+                    client.address.clone(),
+                    (Symbol::new(&env, "contract_initialized"),).into_val(&env),
+                    admin.into_val(&env)
+                )
+            ]
+        );
+    }
+
+    #[test]
+    fn test_duplicate_initialize_emits_no_event() {
+        let (env, client) = setup();
+        let admin = Address::generate(&env);
+        client.initialize(&admin);
+
+        // Clear events after first initialize
+        let _ = env.events().all();
+
+        // Second initialize must fail and emit no event
+        let result = client.try_initialize(&admin);
+        assert!(result.is_err());
+        assert_eq!(env.events().all(), soroban_sdk::vec![&env]);
     }
 }
