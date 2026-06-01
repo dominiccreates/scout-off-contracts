@@ -64,9 +64,9 @@ Maintains the tamper-proof four-tier level state machine.
 |----------|------|-------------|
 | `initialize(admin)` | admin | One-time setup |
 | `advance_level(caller, player_id, milestone_ref)` | caller (validator or scout) | Move player up one level |
-| `get_level(player_id)` | — | Current progress level |
+| `get_level(player_id)` | — | Current progress level; returns `PlayerNotFound` if player is not registered |
 | `get_history_count(player_id)` | — | Number of level changes |
-| `get_history_entry(player_id, index)` | — | Specific history entry |
+| `get_history_entry(player_id, index)` | — | Specific history entry (`ProgressEntry` includes `ledger_sequence: u32` for tamper-proof auditability) |
 | `pause_contract()` / `unpause_contract()` | admin | Circuit breaker |
 | `health()` | — | Returns true if initialized |
 
