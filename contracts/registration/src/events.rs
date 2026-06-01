@@ -28,9 +28,9 @@ pub fn player_deregistered(env: &Env, player_id: u64) {
     );
 }
 
-pub fn scout_verified(env: &Env, scout_id: u64) {
+pub fn player_level_synced(env: &Env, player_id: u64) {
     env.events().publish(
-        (Symbol::new(env, "scout_verified"),),
-        scout_id,
+        (Symbol::new(env, "player_level_synced"),),
+        player_id,
     );
 }

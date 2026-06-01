@@ -46,6 +46,36 @@ impl RegistrationContract {
         Ok(())
     }
 
+    /// Store the progress contract address so it can call set_player_level (admin only).
+    pub fn set_progress_contract(env: Env, addr: Address) -> Result<(), ScoutChainError> {
+        Self::require_admin(&env)?;
+        env.storage().instance().set(&DataKey::ProgressContract, &addr);
+        Ok(())
+    }
+
+    /// Update a player's progress level. Only callable by the registered progress contract.
+    pub fn set_player_level(
+        env: Env,
+        player_id: u64,
+        level: ProgressLevel,
+    ) -> Result<(), ScoutChainError> {
+        let progress_contract: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::ProgressContract)
+            .ok_or(ScoutChainError::Unauthorized)?;
+        progress_contract.require_auth();
+
+        let mut profile = Self::load_player(&env, player_id)?;
+        profile.level = level;
+        profile.updated_at = env.ledger().timestamp();
+        env.storage()
+            .persistent()
+            .set(&DataKey::Player(player_id), &profile);
+        events::player_level_synced(&env, player_id);
+        Ok(())
+    }
+
     // -------------------------------------------------------------------------
     // Player registration
     // -------------------------------------------------------------------------
