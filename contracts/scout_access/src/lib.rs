@@ -3,7 +3,7 @@ mod events;
 mod types;
 
 use errors::ScoutAccessError;
-use types::{DataKey, FeeConfig, Subscription, SubscriptionTier, TrialOffer};
+use types::{ContractHealth, DataKey, FeeConfig, Subscription, SubscriptionTier, TrialOffer};
 
 use soroban_sdk::{contract, contractimpl, token, Address, Env, String};
 
@@ -382,11 +382,16 @@ impl ScoutAccessContract {
         count
     }
 
-    pub fn health(env: Env) -> bool {
-        env.storage()
+    pub fn health(env: Env) -> ContractHealth {
+        let initialized = env.storage()
             .instance()
             .get::<DataKey, bool>(&DataKey::Initialized)
-            .unwrap_or(false)
+            .unwrap_or(false);
+        let paused = env.storage()
+            .instance()
+            .get::<DataKey, bool>(&DataKey::Paused)
+            .unwrap_or(false);
+        ContractHealth { initialized, paused }
     }
 
     // -------------------------------------------------------------------------

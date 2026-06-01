@@ -3,7 +3,7 @@ mod events;
 mod types;
 
 use errors::ProgressError;
-use types::{DataKey, ProgressEntry, ProgressLevel};
+use types::{ContractHealth, DataKey, ProgressEntry, ProgressLevel};
 
 use soroban_sdk::{contract, contractimpl, Address, Env, Vec};
 
@@ -199,7 +199,12 @@ impl ProgressContract {
         env.storage()
             .instance()
             .get::<DataKey, bool>(&DataKey::Initialized)
-            .unwrap_or(false)
+            .unwrap_or(false);
+        let paused = env.storage()
+            .instance()
+            .get::<DataKey, bool>(&DataKey::Paused)
+            .unwrap_or(false);
+        ContractHealth { initialized, paused }
     }
 
     // -------------------------------------------------------------------------

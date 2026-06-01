@@ -1,6 +1,6 @@
 use soroban_sdk::{contracttype, Address, String, Vec};
 
-pub use scoutchain_shared_types::ProgressLevel;
+pub use scoutchain_shared_types::{ContractHealth, ProgressLevel};
 
 /// Basic player vitals stored on-chain
 #[contracttype]
