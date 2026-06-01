@@ -73,7 +73,31 @@ impl VerificationContract {
 
     /// Store the progress contract address so approve_milestone can call it.
     /// Must be called after both contracts are deployed (admin only).
+    /// Returns AlreadyConfigured if called more than once — use update_progress_contract instead.
     pub fn set_progress_contract(
+        env: Env,
+        progress_contract: Address,
+    ) -> Result<(), VerificationError> {
+        Self::require_admin(&env)?;
+        if env
+            .storage()
+            .instance()
+            .has(&DataKey::ProgressContractSet)
+        {
+            return Err(VerificationError::AlreadyConfigured);
+        }
+        env.storage()
+            .instance()
+            .set(&DataKey::ProgressContract, &progress_contract);
+        env.storage()
+            .instance()
+            .set(&DataKey::ProgressContractSet, &true);
+        Ok(())
+    }
+
+    /// Update the progress contract address (admin only).
+    /// Use this for intentional re-wiring after the initial set_progress_contract call.
+    pub fn update_progress_contract(
         env: Env,
         progress_contract: Address,
     ) -> Result<(), VerificationError> {
@@ -81,6 +105,7 @@ impl VerificationContract {
         env.storage()
             .instance()
             .set(&DataKey::ProgressContract, &progress_contract);
+        events::progress_contract_updated(&env, &progress_contract);
         Ok(())
     }
 
@@ -662,5 +687,31 @@ mod tests {
 
         let unknown = Address::generate(&env);
         client.get_validator(&unknown);
+    }
+
+    #[test]
+    fn test_set_progress_contract_second_call_returns_already_configured() {
+        let (env, client) = setup();
+        let admin = Address::generate(&env);
+        client.initialize(&admin);
+
+        let addr = Address::generate(&env);
+        client.set_progress_contract(&addr);
+
+        let result = client.try_set_progress_contract(&addr);
+        assert_eq!(result, Err(Ok(VerificationError::AlreadyConfigured)));
+    }
+
+    #[test]
+    fn test_update_progress_contract_succeeds() {
+        let (env, client) = setup();
+        let admin = Address::generate(&env);
+        client.initialize(&admin);
+
+        let addr1 = Address::generate(&env);
+        let addr2 = Address::generate(&env);
+        client.set_progress_contract(&addr1);
+        // update should succeed without error
+        client.update_progress_contract(&addr2);
     }
 }
