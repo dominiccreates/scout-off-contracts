@@ -36,8 +36,8 @@ pub enum DataKey {
     MilestoneCounter(u64),
     /// (player_id, milestone_index) → Milestone
     Milestone(u64, u32),
-    /// registration contract address (cross-contract calls)
-    RegistrationContract,
+    /// progress contract address (cross-contract calls)
+    ProgressContract,
     /// milestone count per validator wallet
     ValidatorMilestoneCount(Address),
 }

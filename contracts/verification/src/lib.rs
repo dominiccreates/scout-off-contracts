@@ -111,13 +111,27 @@ impl VerificationContract {
 
     pub fn pause_contract(env: Env) -> Result<(), VerificationError> {
         Self::require_admin(&env)?;
+        let admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .ok_or(VerificationError::NotInitialized)?;
+
         env.storage().instance().set(&DataKey::Paused, &true);
+        events::contract_paused(&env, &admin);
         Ok(())
     }
 
     pub fn unpause_contract(env: Env) -> Result<(), VerificationError> {
         Self::require_admin(&env)?;
+        let admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .ok_or(VerificationError::NotInitialized)?;
+
         env.storage().instance().set(&DataKey::Paused, &false);
+        events::contract_unpaused(&env, &admin);
         Ok(())
     }
 
@@ -168,8 +182,8 @@ impl VerificationContract {
         let milestone = Milestone {
             player_id,
             validator: validator_wallet.clone(),
-            description,
-            evidence_hash,
+            description: description.clone(),
+            evidence_hash: evidence_hash.clone(),
             approved_at: env.ledger().timestamp(),
             ledger_sequence: env.ledger().sequence(),
         };
@@ -188,7 +202,14 @@ impl VerificationContract {
             .persistent()
             .set(&val_key, &(val_count.checked_add(1).expect("overflow")));
 
-        events::milestone_approved(&env, player_id, &validator_wallet);
+        events::milestone_approved(
+            &env,
+            player_id,
+            &validator_wallet,
+            next_index,
+            &description,
+            &evidence_hash,
+        );
 
         // Cross-contract call: advance the player's progress level.
         // This is a best-effort call — if the progress contract is not set
@@ -297,10 +318,11 @@ impl VerificationContract {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use soroban_sdk::{testutils::Address as _, Env, String};
+    use soroban_sdk::{testutils::{Address as _, Events, Ledger}, Env, String, Symbol, IntoVal};
 
     fn setup() -> (Env, VerificationContractClient<'static>) {
         let env = Env::default();
+        env.ledger().with_mut(|l| l.sequence_number = 1);
         env.mock_all_auths();
         let id = env.register_contract(None, VerificationContract);
         let client = VerificationContractClient::new(&env, &id);
@@ -514,6 +536,41 @@ mod tests {
             &1u64,
             &String::from_str(&env, "overflow test"),
             &String::from_str(&env, "QmHash"),
+        );
+    }
+
+    #[test]
+    fn test_pause_unpause_events() {
+        let (env, client) = setup();
+        let admin = Address::generate(&env);
+        client.initialize(&admin);
+
+        client.pause_contract();
+        let events = env.events().all();
+        assert_eq!(
+            events,
+            soroban_sdk::vec![
+                &env,
+                (
+                    client.address.clone(),
+                    (Symbol::new(&env, "contract_paused"),).into_val(&env),
+                    admin.clone().into_val(&env)
+                )
+            ]
+        );
+
+        client.unpause_contract();
+        let events = env.events().all();
+        assert_eq!(
+            events,
+            soroban_sdk::vec![
+                &env,
+                (
+                    client.address.clone(),
+                    (Symbol::new(&env, "contract_unpaused"),).into_val(&env),
+                    admin.clone().into_val(&env)
+                )
+            ]
         );
     }
 
