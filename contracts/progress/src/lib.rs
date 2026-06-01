@@ -111,7 +111,7 @@ impl ProgressContract {
             .persistent()
             .set(&DataKey::PlayerLevel(player_id), &new_level);
 
-        events::progress_updated(&env, player_id, &new_level, &caller);
+        events::progress_updated(&env, player_id, &new_level, &caller, milestone_ref);
         Ok(new_level)
     }
 

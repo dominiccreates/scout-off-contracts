@@ -13,6 +13,7 @@ pub fn progress_updated(
     player_id: u64,
     new_level: &ProgressLevel,
     updated_by: &Address,
+    milestone_ref: u32,
 ) {
     env.events().publish(
         (Symbol::new(env, "progress_updated"), updated_by.clone()),
