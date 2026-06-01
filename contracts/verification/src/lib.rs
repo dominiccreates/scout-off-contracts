@@ -116,8 +116,20 @@ impl VerificationContract {
     }
 
     /// Deactivate a validator (admin only).
-    pub fn revoke_validator(env: Env, wallet: Address) -> Result<(), VerificationError> {
+    /// Optionally accepts a reason (max 128 bytes) that is included in the event.
+    pub fn revoke_validator(
+        env: Env,
+        wallet: Address,
+        reason: Option<String>,
+    ) -> Result<(), VerificationError> {
         Self::require_admin(&env)?;
+
+        if let Some(ref r) = reason {
+            if r.len() > 128 {
+                return Err(VerificationError::ReasonTooLong);
+            }
+        }
+
         let mut validator: Validator = env
             .storage()
             .persistent()
@@ -127,7 +139,7 @@ impl VerificationContract {
         env.storage()
             .persistent()
             .set(&DataKey::Validator(wallet.clone()), &validator);
-        events::validator_revoked(&env, &wallet);
+        events::validator_revoked(&env, &wallet, &reason.unwrap_or(String::from_str(&env, "")));
         Ok(())
     }
 
@@ -451,9 +463,42 @@ mod tests {
 
         let validator = Address::generate(&env);
         client.register_validator(&validator, &String::from_str(&env, "Coach"));
-        client.revoke_validator(&validator);
+        let reason: Option<String> = None;
+        client.revoke_validator(&validator, &reason);
 
         assert!(!client.is_active_validator(&validator));
+    }
+
+    #[test]
+    fn test_revoke_validator_with_reason() {
+        let (env, client) = setup();
+        let admin = Address::generate(&env);
+        client.initialize(&admin);
+
+        let validator = Address::generate(&env);
+        client.register_validator(&validator, &String::from_str(&env, "Coach"));
+        let reason = Some(String::from_str(
+            &env,
+            "Misconduct and protocol violation",
+        ));
+        client.revoke_validator(&validator, &reason);
+
+        assert!(!client.is_active_validator(&validator));
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #10)")]
+    fn test_revoke_validator_reason_too_long() {
+        let (env, client) = setup();
+        let admin = Address::generate(&env);
+        client.initialize(&admin);
+
+        let validator = Address::generate(&env);
+        client.register_validator(&validator, &String::from_str(&env, "Coach"));
+        // 129-byte string
+        let long_reason = "x".repeat(129);
+        let reason = Some(String::from_str(&env, &long_reason));
+        client.revoke_validator(&validator, &reason);
     }
 
     #[test]
@@ -465,7 +510,8 @@ mod tests {
 
         let validator = Address::generate(&env);
         client.register_validator(&validator, &String::from_str(&env, "Coach"));
-        client.revoke_validator(&validator);
+        let reason: Option<String> = None;
+        client.revoke_validator(&validator, &reason);
 
         // Should panic — validator is inactive
         client.approve_milestone(
