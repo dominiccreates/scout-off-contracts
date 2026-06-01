@@ -1,6 +1,6 @@
 use soroban_sdk::{contracttype, Address};
 
-pub use scoutchain_shared_types::ProgressLevel;
+pub use scoutchain_shared_types::{ContractHealth, ProgressLevel};
 
 /// A single entry in the immutable progress history
 #[contracttype]

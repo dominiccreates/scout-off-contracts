@@ -3,7 +3,7 @@ mod events;
 mod types;
 
 use errors::ScoutChainError;
-use types::{DataKey, PlayerProfile, PlayerVitals, ProgressLevel, ScoutProfile};
+use types::{ContractHealth, DataKey, PlayerProfile, PlayerVitals, ProgressLevel, ScoutProfile};
 
 use soroban_sdk::{contract, contractimpl, Address, Env, String, Vec};
 
@@ -245,11 +245,16 @@ impl RegistrationContract {
             .unwrap_or(0u64)
     }
 
-    pub fn health(env: Env) -> bool {
-        env.storage()
+    pub fn health(env: Env) -> ContractHealth {
+        let initialized = env.storage()
             .instance()
             .get::<DataKey, bool>(&DataKey::Initialized)
-            .unwrap_or(false)
+            .unwrap_or(false);
+        let paused = env.storage()
+            .instance()
+            .get::<DataKey, bool>(&DataKey::Paused)
+            .unwrap_or(false);
+        ContractHealth { initialized, paused }
     }
 
     // -------------------------------------------------------------------------

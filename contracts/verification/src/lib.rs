@@ -16,7 +16,7 @@ mod events;
 mod types;
 
 use errors::VerificationError;
-use types::{DataKey, Milestone, Validator};
+use types::{ContractHealth, DataKey, Milestone, Validator};
 
 use soroban_sdk::{contract, contractimpl, Address, Env, String};
 
@@ -278,11 +278,16 @@ impl VerificationContract {
             .unwrap_or(false)
     }
 
-    pub fn health(env: Env) -> bool {
-        env.storage()
+    pub fn health(env: Env) -> ContractHealth {
+        let initialized = env.storage()
             .instance()
             .get::<DataKey, bool>(&DataKey::Initialized)
-            .unwrap_or(false)
+            .unwrap_or(false);
+        let paused = env.storage()
+            .instance()
+            .get::<DataKey, bool>(&DataKey::Paused)
+            .unwrap_or(false);
+        ContractHealth { initialized, paused }
     }
 
     // -------------------------------------------------------------------------

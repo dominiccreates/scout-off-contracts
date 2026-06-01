@@ -1,4 +1,5 @@
 use soroban_sdk::{contracttype, Address, String};
+pub use scoutchain_shared_types::ContractHealth;
 
 /// A single verified milestone record
 #[contracttype]
