@@ -323,7 +323,7 @@ impl VerificationContract {
         env.storage()
             .persistent()
             .get(&DataKey::Milestone(player_id, index))
-            .ok_or(VerificationError::InvalidInput)
+            .ok_or(VerificationError::MilestoneNotFound)
     }
 
     pub fn get_milestone_count(env: Env, player_id: u64) -> u32 {
