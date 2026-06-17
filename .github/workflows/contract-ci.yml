@@ -52,3 +52,5 @@ jobs:
         run: cargo clippy --workspace -- -D warnings
       - name: Format check
         run: cargo fmt --all -- --check
+      - name: Docs completeness check
+        run: bash scripts/check-docs.sh
