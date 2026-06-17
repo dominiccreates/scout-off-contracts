@@ -129,7 +129,7 @@ impl ScoutAccessContract {
             .get(&DataKey::AccumulatedFees)
             .unwrap_or(0i128);
         if fees == 0 {
-            return Err(ScoutAccessError::InsufficientFee);
+            return Err(ScoutAccessError::NoFeesToWithdraw);
         }
         let xlm = Self::get_token(&env);
         let contract_addr = env.current_contract_address();
@@ -223,10 +223,7 @@ impl ScoutAccessContract {
             SubscriptionTier::Elite => config.elite_sub_stroops,
         };
 
-        let xlm = Self::get_token(&env);
-        let contract_addr = env.current_contract_address();
-        token::Client::new(&env, &xlm).transfer(&scout, &contract_addr, &fee);
-        Self::accumulate_fee(&env, fee)?;
+        Self::collect_fee(&env, &scout, fee)?;
 
         let sub = Subscription {
             scout: scout.clone(),
@@ -269,6 +266,7 @@ impl ScoutAccessContract {
     ) -> Result<(), ScoutAccessError> {
         Self::bump_instance_ttl(&env);
         Self::require_not_paused(&env)?;
+        Self::require_initialized(&env)?;
         scout.require_auth();
         Self::require_active_subscription(&env, &scout)?;
 
@@ -278,14 +276,7 @@ impl ScoutAccessContract {
         }
 
         let config = Self::fee_config(&env);
-        let xlm = Self::get_token(&env);
-        let contract_addr = env.current_contract_address();
-        token::Client::new(&env, &xlm).transfer(
-            &scout,
-            &contract_addr,
-            &config.contact_fee_stroops,
-        );
-        Self::accumulate_fee(&env, config.contact_fee_stroops)?;
+        Self::collect_fee(&env, &scout, config.contact_fee_stroops)?;
 
         env.storage().persistent().set(&contact_key, &true);
         env.storage()
@@ -555,6 +546,15 @@ impl ScoutAccessContract {
             .instance()
             .set(&DataKey::AccumulatedFees, &new_total);
         Ok(())
+    }
+
+    /// Transfer `amount` stroops from `payer` to this contract and add it to
+    /// `AccumulatedFees`. Both steps are atomic within the transaction.
+    fn collect_fee(env: &Env, payer: &Address, amount: i128) -> Result<(), ScoutAccessError> {
+        let xlm = Self::get_token(env);
+        let contract_addr = env.current_contract_address();
+        token::Client::new(env, &xlm).transfer(payer, &contract_addr, &amount);
+        Self::accumulate_fee(env, amount)
     }
 
     /// Validate that every fee field is positive and sub_duration_secs is non-zero.
@@ -956,7 +956,7 @@ mod tests {
         let (env, _admin, _xlm, _contract_id, client) = setup();
         let recipient = Address::generate(&env);
         let result = client.try_withdraw_fees(&recipient);
-        assert_eq!(result, Err(Ok(ScoutAccessError::InsufficientFee)));
+        assert_eq!(result, Err(Ok(ScoutAccessError::NoFeesToWithdraw)));
     }
 
     #[test]
