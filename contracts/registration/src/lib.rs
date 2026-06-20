@@ -1,5 +1,4 @@
 #![cfg_attr(target_family = "wasm", no_std)]
-#![no_std]
 mod errors;
 mod events;
 mod types;
@@ -51,18 +50,21 @@ impl RegistrationContract {
     }
 
     /// Upgrade the contract WASM. Admin auth required.
-    /// Persistent storage (including Admin) survives this call.
-    pub fn upgrade(env: Env, new_wasm_hash: soroban_sdk::BytesN<32>) -> Result<(), ScoutChainError> {
-        Self::require_admin(&env)?;
-        env.deployer().update_current_contract_wasm(new_wasm_hash);
-    /// Store the progress contract address so it can call set_player_level (admin only).
-    pub fn set_progress_contract(env: Env, addr: Address) -> Result<(), ScoutChainError> {
-        Self::require_admin(&env)?;
-        env.storage()
-            .instance()
-            .set(&DataKey::ProgressContract, &addr);
-        Ok(())
-    }
+/// Persistent storage (including Admin) survives this call.
+pub fn upgrade(
+    env: Env,
+    new_wasm_hash: soroban_sdk::BytesN<32>,
+) -> Result<(), ScoutChainError> {
+    Self::require_admin(&env)?;
+    env.deployer().update_current_contract_wasm(new_wasm_hash);
+    Ok(())
+}
+
+/// Store the progress contract address so it can call set_player_level (admin only).
+pub fn set_progress_contract(
+    env: Env,
+    addr: Address,
+) -> Result<(), ScoutChainError> {
 
     /// Update a player's progress level. Only callable by the registered progress contract.
     pub fn set_player_level(
@@ -782,19 +784,42 @@ mod tests {
     }
 
     #[test]
-    fn test_upgrade_preserves_admin() {
-    // -------------------------------------------------------------------------
-    // Issue #28: require_initialized before require_not_paused
-    // -------------------------------------------------------------------------
+fn test_upgrade_preserves_admin() {
+    let env = Env::default();
 
-    #[test]
-    #[should_panic]
-    fn test_register_player_uninitialized_returns_not_initialized() {
-        let (env, client) = setup();
-        let wallet = Address::generate(&env);
-        let vitals = dummy_vitals(&env);
-        let hashes = vec![&env, String::from_str(&env, "QmTest")];
-        client.register_player(&wallet, &vitals, &hashes);
+    let contract_id = env.register(RegistrationContract, ());
+    let client = RegistrationContractClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    client.initialize(&admin);
+
+    // Register a player so we confirm persistent data also survives
+    let wallet = Address::generate(&env);
+    let vitals = dummy_vitals(&env);
+    let hashes = vec![&env, String::from_str(&env, "QmTest")];
+
+    let player_id = client.register_player(
+        &wallet,
+        &vitals,
+        &hashes,
+    );
+
+    let new_wasm_hash =
+        env.deployer()
+            .upload_contract_wasm(soroban_sdk::Bytes::new(&env));
+
+    client.upgrade(&new_wasm_hash);
+
+    // Admin persisted
+    client.pause_contract();
+
+    // Existing data persisted
+    assert_eq!(
+        client.get_player(&player_id).player_id,
+        player_id
+    );
+}        
+    client.register_player(&wallet, &vitals, &hashes);
     }
 
     #[test]
