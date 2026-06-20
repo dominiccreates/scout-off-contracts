@@ -284,7 +284,7 @@ scoutchain-contracts/
 
 ```bash
 cp .env.example .env
-# Fill in DEPLOYER_SECRET, ADMIN_ADDRESS, XLM_TOKEN_ADDRESS
+# Fill in all six environment variables from .env.example
 ./scripts/setup-testnet.sh
 ```
 
@@ -306,7 +306,7 @@ rustup target add wasm32-unknown-unknown
 
 ```bash
 cp .env.example .env
-# Fill in DEPLOYER_SECRET, ADMIN_ADDRESS, XLM_TOKEN_ADDRESS
+# Fill in all six required environment variables
 ```
 
 #### 3. Build and deploy
@@ -415,16 +415,16 @@ psql $DATABASE_URL -f migrations/001_initial_schema.sql
 
 ## Configuration
 
-Copy `.env.example` to `.env` and fill in the three required values before running any script:
+Copy `.env.example` to `.env` and fill in all required values before running any script:
 
 | Variable | Description |
 |----------|-------------|
 | `DEPLOYER_SECRET` | Stellar secret key used to deploy and invoke contracts |
 | `ADMIN_ADDRESS` | Stellar G-address that will own all four contracts |
 | `XLM_TOKEN_ADDRESS` | Native XLM token contract address on the target network |
-| `STELLAR_NETWORK` | `testnet` or `mainnet` (default: `testnet`) |
-| `HORIZON_URL` | Stellar Horizon endpoint |
-| `SOROBAN_RPC_URL` | Soroban RPC endpoint |
+| `STELLAR_NETWORK` | Target network: `testnet` or `mainnet` (default: `testnet`) |
+| `HORIZON_URL` | Stellar Horizon endpoint for the target network |
+| `SOROBAN_RPC_URL` | Soroban RPC endpoint for the target network |
 
 Network-specific addresses are in `config/testnet.json` and `config/mainnet.json`.
 
