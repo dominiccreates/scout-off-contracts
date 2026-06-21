@@ -13,5 +13,7 @@ pub enum VerificationError {
     ValidatorAlreadyRegistered = 7,
     PlayerNotFound = 8,
     InvalidInput = 9,
+    /// Validator has reached the per-player milestone approval limit.
+    MilestoneLimitExceeded = 10,
     Overflow = 13,
 }

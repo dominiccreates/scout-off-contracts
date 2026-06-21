@@ -20,6 +20,11 @@ use types::{DataKey, Milestone, Validator};
 
 use soroban_sdk::{contract, contractimpl, Address, Env, String};
 
+/// Maximum milestones a single validator may approve for one player.
+/// Prevents storage spam and stops a colluding validator from advancing
+/// a player through all levels repeatedly or exhausting persistent storage.
+const MAX_MILESTONES_PER_PLAYER_PER_VALIDATOR: u32 = 10;
+
 // Generated client for the progress contract — used for cross-contract calls.
 // The progress contract must be deployed and its address registered via
 // `set_progress_contract` before `approve_milestone` can advance levels.
@@ -156,6 +161,16 @@ impl VerificationContract {
             return Err(VerificationError::ValidatorInactive);
         }
 
+        let vp_key = DataKey::ValidatorPlayerMilestoneCount(validator_wallet.clone(), player_id);
+        let vp_count: u32 = env
+            .storage()
+            .persistent()
+            .get(&vp_key)
+            .unwrap_or(0u32);
+        if vp_count >= MAX_MILESTONES_PER_PLAYER_PER_VALIDATOR {
+            return Err(VerificationError::MilestoneLimitExceeded);
+        }
+
         // Increment milestone counter for this player
         let counter_key = DataKey::MilestoneCounter(player_id);
         let index: u32 = env
@@ -168,8 +183,8 @@ impl VerificationContract {
         let milestone = Milestone {
             player_id,
             validator: validator_wallet.clone(),
-            description,
-            evidence_hash,
+            description: description.clone(),
+            evidence_hash: evidence_hash.clone(),
             approved_at: env.ledger().timestamp(),
             ledger_sequence: env.ledger().sequence(),
         };
@@ -186,9 +201,23 @@ impl VerificationContract {
         let val_count: u32 = env.storage().persistent().get(&val_key).unwrap_or(0u32);
         env.storage()
             .persistent()
-            .set(&val_key, &(val_count.checked_add(1).expect("overflow")));
+            .set(&val_key, &(val_count.checked_add(1).ok_or(VerificationError::Overflow)?));
 
-        events::milestone_approved(&env, player_id, &validator_wallet);
+        env.storage().persistent().set(
+            &vp_key,
+            &(vp_count
+                .checked_add(1)
+                .ok_or(VerificationError::Overflow)?),
+        );
+
+        events::milestone_approved(
+            &env,
+            player_id,
+            &validator_wallet,
+            next_index,
+            &description,
+            &evidence_hash,
+        );
 
         // Cross-contract call: advance the player's progress level.
         // This is a best-effort call — if the progress contract is not set
@@ -526,5 +555,48 @@ mod tests {
 
         let unknown = Address::generate(&env);
         client.get_validator(&unknown);
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #10)")]
+    fn test_approve_milestone_per_player_validator_limit() {
+        let (env, client) = setup();
+        let admin = Address::generate(&env);
+        client.initialize(&admin);
+
+        let validator = Address::generate(&env);
+        client.register_validator(&validator, &String::from_str(&env, "Coach"));
+
+        let desc = String::from_str(&env, "milestone");
+        let evidence = String::from_str(&env, "QmEvidence");
+
+        for _ in 0..MAX_MILESTONES_PER_PLAYER_PER_VALIDATOR {
+            client.approve_milestone(&validator, &1u64, &desc, &evidence);
+        }
+
+        client.approve_milestone(&validator, &1u64, &desc, &evidence);
+    }
+
+    #[test]
+    fn test_approve_milestone_limit_is_per_validator() {
+        let (env, client) = setup();
+        let admin = Address::generate(&env);
+        client.initialize(&admin);
+
+        let validator1 = Address::generate(&env);
+        let validator2 = Address::generate(&env);
+        client.register_validator(&validator1, &String::from_str(&env, "Coach A"));
+        client.register_validator(&validator2, &String::from_str(&env, "Coach B"));
+
+        let desc = String::from_str(&env, "milestone");
+        let evidence = String::from_str(&env, "QmEvidence");
+
+        for _ in 0..MAX_MILESTONES_PER_PLAYER_PER_VALIDATOR {
+            client.approve_milestone(&validator1, &1u64, &desc, &evidence);
+        }
+
+        // A different validator can still approve for the same player
+        let idx = client.approve_milestone(&validator2, &1u64, &desc, &evidence);
+        assert_eq!(idx, (MAX_MILESTONES_PER_PLAYER_PER_VALIDATOR + 1) as u32);
     }
 }
