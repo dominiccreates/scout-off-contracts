@@ -93,6 +93,7 @@ impl VerificationContract {
         env.storage()
             .instance()
             .set(&DataKey::ProgressContractSet, &true);
+        events::progress_contract_updated(&env, &progress_contract);
         Ok(())
     }
 
@@ -761,6 +762,29 @@ mod tests {
     }
 
     #[test]
+    fn test_set_progress_contract_emits_event() {
+        let (env, client) = setup();
+        let admin = Address::generate(&env);
+        client.initialize(&admin);
+
+        let addr = Address::generate(&env);
+        client.set_progress_contract(&addr);
+
+        let events = env.events().all();
+        assert_eq!(
+            events,
+            soroban_sdk::vec![
+                &env,
+                (
+                    client.address.clone(),
+                    (Symbol::new(&env, "progress_contract_updated"),).into_val(&env),
+                    addr.into_val(&env)
+                )
+            ]
+        );
+    }
+
+    #[test]
     fn test_update_progress_contract_succeeds() {
         let (env, client) = setup();
         let admin = Address::generate(&env);
@@ -769,7 +793,6 @@ mod tests {
         let addr1 = Address::generate(&env);
         let addr2 = Address::generate(&env);
         client.set_progress_contract(&addr1);
-        // update should succeed without error
         client.update_progress_contract(&addr2);
     }
 
