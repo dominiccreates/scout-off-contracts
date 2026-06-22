@@ -36,10 +36,10 @@ impl ProgressLevel {
 
 /// Validate that a string is a plausible CID hash.
 /// Must start with "Qm" (CIDv0) or "bafy" (CIDv1) and be 2–128 bytes long.
-pub fn validate_cid(hash: &String) -> Result<(), ()> {
+pub fn validate_cid(hash: &String) -> Result<(), &'static str> {
     let hash_len = hash.len();
     if !(2..=128).contains(&hash_len) {
-        return Err(());
+        return Err("invalid cid");
     }
     let bytes = hash.to_bytes();
     let starts_with_qm = bytes.get(0) == Some(b'Q') && bytes.get(1) == Some(b'm');
@@ -49,7 +49,7 @@ pub fn validate_cid(hash: &String) -> Result<(), ()> {
         && bytes.get(2) == Some(b'f')
         && bytes.get(3) == Some(b'y');
     if !starts_with_qm && !starts_with_bafy {
-        return Err(());
+        return Err("invalid cid");
     }
     Ok(())
 }

@@ -8,7 +8,7 @@ use types::{DataKey, FeeConfig, Subscription, SubscriptionTier, TrialOffer};
 
 use soroban_sdk::{contract, contractimpl, token, Address, Env, String};
 
-use scoutchain_shared_types::{ContractHealth, validate_cid};
+use scoutchain_shared_types::{validate_cid, ContractHealth};
 
 // Generated client for cross-contract calls to the progress contract.
 // In native/test builds the mock implementation below is used instead.
@@ -902,7 +902,10 @@ mod tests {
         let idx = client.log_trial_offer(
             &scout,
             &1u64,
-            &String::from_str(&env, "bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi"),
+            &String::from_str(
+                &env,
+                "bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi",
+            ),
         );
         assert_eq!(idx, 1);
         assert_eq!(client.get_trial_count(&1u64), 1);
