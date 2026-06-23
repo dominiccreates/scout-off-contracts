@@ -26,6 +26,16 @@ pub struct PlayerProfile {
     pub updated_at: u64,
 }
 
+/// Lightweight player view for scout discovery (no IPFS hashes or wallet).
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct PlayerSummary {
+    pub player_id: u64,
+    pub vitals: PlayerVitals,
+    pub level: ProgressLevel,
+    pub updated_at: u64,
+}
+
 /// Scout profile stored on-chain
 #[contracttype]
 #[derive(Clone, Debug)]

@@ -256,6 +256,33 @@ impl RegistrationContract {
         Self::load_player(&env, player_id)
     }
 
+    /// Return a lightweight player summary without IPFS hashes or wallet.
+    pub fn get_player_summary(
+        env: Env,
+        player_id: u64,
+    ) -> Result<PlayerSummary, ScoutChainError> {
+        let profile = Self::load_player(&env, player_id)?;
+        Ok(Self::to_player_summary(&profile))
+    }
+
+    /// Batch-fetch player summaries for up to 20 IDs in a single call.
+    /// Missing IDs are skipped (partial hits).
+    pub fn get_players(env: Env, ids: Vec<u64>) -> Result<Vec<PlayerSummary>, ScoutChainError> {
+        if ids.len() > MAX_BATCH_SIZE {
+            return Err(ScoutChainError::InvalidInput);
+        }
+
+        let mut summaries = Vec::new(&env);
+        for i in 0..ids.len() {
+            if let Some(id) = ids.get(i) {
+                if let Ok(profile) = Self::load_player(&env, id) {
+                    summaries.push_back(Self::to_player_summary(&profile));
+                }
+            }
+        }
+        Ok(summaries)
+    }
+
     pub fn get_player_by_wallet(
         env: Env,
         wallet: Address,
@@ -423,6 +450,15 @@ impl RegistrationContract {
             .persistent()
             .get(&DataKey::Player(player_id))
             .ok_or(ScoutChainError::PlayerNotFound)
+    }
+
+    fn to_player_summary(profile: &PlayerProfile) -> PlayerSummary {
+        PlayerSummary {
+            player_id: profile.player_id,
+            vitals: profile.vitals.clone(),
+            level: profile.level.clone(),
+            updated_at: profile.updated_at,
+        }
     }
 
     fn next_player_id(env: &Env) -> Result<u64, ScoutChainError> {
