@@ -11,6 +11,7 @@ use soroban_sdk::{contract, contractimpl, Address, Env, String, Vec};
 const MAX_REGION_LEN: u32 = 128;
 const MAX_STRING_LEN: u32 = 64;
 const MAX_IPFS_HASHES: u32 = 10;
+const CONTRACT_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 #[contract]
 pub struct RegistrationContract;
@@ -374,6 +375,11 @@ impl RegistrationContract {
         Ok(results)
     }
 
+    /// Returns the deployed crate version (from Cargo.toml at build time).
+    pub fn version(env: Env) -> String {
+        String::from_str(&env, CONTRACT_VERSION)
+    }
+
     // -------------------------------------------------------------------------
     // Internal helpers
     // -------------------------------------------------------------------------
@@ -504,6 +510,12 @@ mod tests {
         let admin = Address::generate(&env);
         client.initialize(&admin);
         assert!(client.health().initialized);
+    }
+
+    #[test]
+    fn test_version() {
+        let (env, client) = setup();
+        assert_eq!(client.version(), String::from_str(&env, "0.1.0"));
     }
 
     #[test]

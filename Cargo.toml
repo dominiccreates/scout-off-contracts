@@ -8,6 +8,10 @@ members = [
 ]
 resolver = "2"
 
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+
 [workspace.dependencies]
 soroban-sdk = { version = "25.3.1" }
 soroban-sdk-testutils = { version = "25.3.1", package = "soroban-sdk", features = ["testutils"] }

@@ -25,6 +25,8 @@ use scoutchain_shared_types::validate_cid;
 
 const MAX_CREDENTIALS_LEN: u32 = 256;
 
+const CONTRACT_VERSION: &str = env!("CARGO_PKG_VERSION");
+
 // Generated client for the progress contract — used for cross-contract calls.
 // The progress contract must be deployed and its address registered via
 // `set_progress_contract` before `approve_milestone` can advance levels.
@@ -397,6 +399,11 @@ impl VerificationContract {
         }
     }
 
+    /// Returns the deployed crate version (from Cargo.toml at build time).
+    pub fn version(env: Env) -> String {
+        String::from_str(&env, CONTRACT_VERSION)
+    }
+
     // -------------------------------------------------------------------------
     // Internal helpers
     // -------------------------------------------------------------------------
@@ -477,6 +484,12 @@ mod tests {
     fn test_health_false_before_initialize() {
         let (_env, client) = setup();
         assert!(!client.health().initialized);
+    }
+
+    #[test]
+    fn test_version() {
+        let (env, client) = setup();
+        assert_eq!(client.version(), String::from_str(&env, "0.1.0"));
     }
 
     #[test]

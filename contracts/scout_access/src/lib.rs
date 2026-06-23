@@ -67,6 +67,7 @@ const PERSISTENT_TTL_MAX: u32 = 2_000;
 // Trial offer TTL: ~30 days at 5 s/ledger.
 const TRIAL_TTL_THRESHOLD: u32 = 259_200;
 const TRIAL_TTL_EXTEND_TO: u32 = 518_400;
+const CONTRACT_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 // Minimum interval (seconds) between subscribe calls for the same scout
 // to prevent race conditions / double-charging on rapid upgrades.
@@ -502,6 +503,11 @@ impl ScoutAccessContract {
         }
     }
 
+    /// Returns the deployed crate version (from Cargo.toml at build time).
+    pub fn version(env: Env) -> String {
+        String::from_str(&env, CONTRACT_VERSION)
+    }
+
     // -------------------------------------------------------------------------
     // Internal helpers
     // -------------------------------------------------------------------------
@@ -717,6 +723,12 @@ mod tests {
         // Storage must reflect the new config.
         let stored = client.get_fee_config();
         assert_eq!(stored.contact_fee_stroops, new_fees.contact_fee_stroops);
+    }
+
+    #[test]
+    fn test_version() {
+        let (env, _, _, _, client) = setup();
+        assert_eq!(client.version(), String::from_str(&env, "0.1.0"));
     }
 
     #[test]
