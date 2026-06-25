@@ -25,6 +25,11 @@ use scoutchain_shared_types::validate_cid;
 
 const MAX_CREDENTIALS_LEN: u32 = 256;
 
+/// Maximum number of simultaneously registered validators.
+/// Increase requires a contract upgrade because the ValidatorVector entry
+/// is bounded by Soroban's 64 KB per-entry limit.
+const MAX_VALIDATORS: u32 = 100;
+
 const CONTRACT_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 // Generated client for the progress contract — used for cross-contract calls.
@@ -128,6 +133,16 @@ impl VerificationContract {
             return Err(VerificationError::InvalidInput);
         }
 
+        let mut validator_vector: Vec<Address> = env
+            .storage()
+            .persistent()
+            .get(&DataKey::ValidatorVector)
+            .unwrap_or_else(|| Vec::new(&env));
+
+        if validator_vector.len() >= MAX_VALIDATORS {
+            return Err(VerificationError::ValidatorCapReached);
+        }
+
         if env
             .storage()
             .persistent()
@@ -145,27 +160,13 @@ impl VerificationContract {
         env.storage()
             .persistent()
             .set(&DataKey::Validator(wallet.clone()), &validator);
-        events::validator_registered(&env, &wallet);
 
-        // // ------ PASTE THE TRACKING LOGIC HERE ------
-        let mut validator_vector: Vec<Address> = env
-            .storage()
-            .persistent()
-            .get(&DataKey::ValidatorVector)
-            .unwrap_or_else(|| Vec::new(&env));
-
-        if validator_vector.len() >= 100 {
-            panic!("Maximum validator capacity of 100 reached");
-        }
-
-        if !validator_vector.contains(&wallet) {
-            validator_vector.push_back(wallet.clone());
-        }
-
+        validator_vector.push_back(wallet.clone());
         env.storage()
             .persistent()
             .set(&DataKey::ValidatorVector, &validator_vector);
-        // // -------------------------------------------
+
+        events::validator_registered(&env, &wallet);
 
         Ok(())
     }
@@ -861,6 +862,24 @@ mod tests {
         let result = client.try_initialize(&admin);
         assert!(result.is_err());
         assert_eq!(env.events().all(), soroban_sdk::vec![&env]);
+    }
+
+    #[test]
+    fn test_register_validator_cap_boundary() {
+        let (env, client) = setup();
+        let admin = Address::generate(&env);
+        client.initialize(&admin);
+
+        // Register exactly MAX_VALIDATORS (100) validators — all must succeed.
+        for _ in 0..100 {
+            let v = Address::generate(&env);
+            client.register_validator(&v, &String::from_str(&env, "Credentials"));
+        }
+
+        // The 101st registration must return ValidatorCapReached, not panic.
+        let extra = Address::generate(&env);
+        let result = client.try_register_validator(&extra, &String::from_str(&env, "Credentials"));
+        assert_eq!(result, Err(Ok(VerificationError::ValidatorCapReached)));
     }
 
     #[test]

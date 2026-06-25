@@ -387,10 +387,12 @@ stellar contract invoke --id $VERIFICATION_CONTRACT_ID \
 Onboard a new trusted validator (coach, academy director, certified trainer).
 `credentials` is a human-readable label (max 256 bytes, e.g. `"UEFA B License"`).
 
+The contract enforces a cap of **100 simultaneously registered validators**. This limit exists because all validator addresses are stored in a single persistent entry; exceeding Soroban's 64 KB per-entry limit would cause the entry to become unreadable. Raising the cap requires a contract upgrade.
+
 | | |
 |---|---|
 | **Auth** | Admin must sign |
-| **Errors** | `ValidatorAlreadyRegistered` · `InvalidInput` (credentials >256 bytes) · `NotInitialized` · `ContractPaused` |
+| **Errors** | `ValidatorAlreadyRegistered` · `InvalidInput` (credentials >256 bytes) · `ValidatorCapReached` (100-validator limit reached) · `NotInitialized` · `ContractPaused` |
 
 ```bash
 stellar contract invoke --id $VERIFICATION_CONTRACT_ID \
@@ -1368,6 +1370,7 @@ pub struct TrialOffer {
 | 12 | `ProgressCallFailed` | Cross-contract `advance_level` failed |
 | 13 | `Overflow` | Milestone counter overflowed |
 | 14 | `MilestoneNotFound` | Index out of range |
+| 15 | `ValidatorCapReached` | 100-validator limit reached; contract upgrade required to raise the cap |
 
 ### `ProgressError` (progress contract)
 
