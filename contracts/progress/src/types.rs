@@ -47,4 +47,7 @@ pub enum DataKey {
     /// The `Address` of the registration contract. Only this address is
     /// permitted to call `initialize_player`. Set by `set_registration_contract`.
     RegistrationContract,
+    /// The `Address` of the scout_access contract. Whitelisted as a secondary
+    /// authorised caller of `advance_level` (for trial-offer Level-3 advances).
+    ScoutAccessContract,
 }

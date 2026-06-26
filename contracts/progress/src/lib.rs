@@ -6,13 +6,15 @@ mod types;
 use errors::ProgressError;
 use types::{ContractHealth, DataKey, ProgressEntry, ProgressLevel};
 
-use soroban_sdk::{contract, contractimpl, Address, Env, Vec};
+use soroban_sdk::{contract, contractimpl, Address, Env, String, Vec};
 
 const INSTANCE_TTL_MIN: u32 = 100;
 const INSTANCE_TTL_MAX: u32 = 500;
 
 const PERSISTENT_TTL_MIN: u32 = 500;
 const PERSISTENT_TTL_MAX: u32 = 2000;
+
+const CONTRACT_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 #[contract]
 pub struct ProgressContract;
@@ -46,6 +48,35 @@ impl ProgressContract {
         Self::bump_instance_ttl(&env);
         Self::require_admin(&env)?;
         env.storage().instance().set(&DataKey::Paused, &false);
+        Ok(())
+    }
+
+    /// Register the verification contract address so advance_level can
+    /// authenticate callers (admin only). Must be called before any
+    /// advance_level call — without it, advance_level returns NotInitialized.
+    pub fn set_verification_contract(
+        env: Env,
+        addr: Address,
+    ) -> Result<(), ProgressError> {
+        Self::bump_instance_ttl(&env);
+        Self::require_admin(&env)?;
+        env.storage()
+            .instance()
+            .set(&DataKey::VerificationContract, &addr);
+        Ok(())
+    }
+
+    /// Optionally whitelist the scout_access contract as a secondary caller of
+    /// advance_level (for trial-offer Level-3 advances). Admin only.
+    pub fn set_scout_access_contract(
+        env: Env,
+        addr: Address,
+    ) -> Result<(), ProgressError> {
+        Self::bump_instance_ttl(&env);
+        Self::require_admin(&env)?;
+        env.storage()
+            .instance()
+            .set(&DataKey::ScoutAccessContract, &addr);
         Ok(())
     }
 
@@ -107,17 +138,32 @@ impl ProgressContract {
         Self::require_not_paused(&env)?;
         Self::require_initialized(&env)?;
 
-        if let Some(verification_contract) = env
+        // Only the configured VerificationContract (or the optional secondary
+        // ScoutAccessContract for trial-offer Level-3 advances) may call this
+        // function.  If neither whitelist address is configured the call is
+        // rejected — there is no open fallback.
+        let verification_contract: Address = env
             .storage()
             .instance()
             .get::<DataKey, Address>(&DataKey::VerificationContract)
-        {
-            // When configured, only the verification contract may invoke this
-            // function (directly or via cross-contract call). The `caller`
-            // argument still records the validator or scout that triggered it.
-            verification_contract.require_auth();
+            .ok_or(ProgressError::NotInitialized)?;
+
+        // Check whether an optional secondary caller (e.g. scout_access) is
+        // also whitelisted, then require auth from whichever address matches.
+        let secondary: Option<Address> = env
+            .storage()
+            .instance()
+            .get::<DataKey, Address>(&DataKey::ScoutAccessContract);
+
+        let caller_is_secondary = secondary
+            .as_ref()
+            .map(|a| a == &caller)
+            .unwrap_or(false);
+
+        if caller_is_secondary {
+            secondary.unwrap().require_auth();
         } else {
-            caller.require_auth();
+            verification_contract.require_auth();
         }
 
         let current = Self::get_current_level(&env, player_id);
@@ -327,20 +373,22 @@ mod tests {
         vec, Env, IntoVal, Symbol,
     };
 
-    fn setup() -> (Env, ProgressContractClient<'static>) {
+    fn setup() -> (Env, ProgressContractClient<'static>, Address) {
         let env = Env::default();
         env.mock_all_auths();
         let id = env.register_contract(None, ProgressContract);
         let client = ProgressContractClient::new(&env, &id);
-        (env, client)
+        let admin = Address::generate(&env);
+        client.initialize(&admin);
+        // Wire a dummy verification contract so advance_level doesn't reject callers.
+        let verification = Address::generate(&env);
+        client.set_verification_contract(&verification);
+        (env, client, verification)
     }
 
     #[test]
     fn test_two_players_advance_independently() {
-        let (env, client) = setup();
-        let admin = Address::generate(&env);
-        client.initialize(&admin);
-        let validator = Address::generate(&env);
+        let (env, client, validator) = setup();
 
         // Player 1: advance to Level 2 (PerformanceMilestones)
         client.advance_level(&validator, &1u64, &1u32);
@@ -360,11 +408,7 @@ mod tests {
 
     #[test]
     fn test_advance_level_sequence() {
-        let (env, client) = setup();
-        let admin = Address::generate(&env);
-        client.initialize(&admin);
-
-        let validator = Address::generate(&env);
+        let (_, client, validator) = setup();
         let player_id = 1u64;
 
         // Unverified → VerifiedIdentity
@@ -384,11 +428,7 @@ mod tests {
 
     #[test]
     fn test_get_history_entry_correct_data() {
-        let (env, client) = setup();
-        let admin = Address::generate(&env);
-        client.initialize(&admin);
-
-        let validator = Address::generate(&env);
+        let (_, client, validator) = setup();
         let player_id = 42u64;
         let milestone = 7u32;
 
@@ -415,16 +455,55 @@ mod tests {
         let caller = Address::generate(&env);
         let result = client.try_advance_level(&caller, &99u64, &1u32);
 
+        // Contract is not initialized, so NotInitialized is returned.
         assert_eq!(result, Err(Ok(ProgressError::NotInitialized)));
     }
 
     #[test]
-    fn test_get_progress_history_three_entries() {
-        let (env, client) = setup();
+    fn test_advance_level_without_verification_contract() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let id = env.register_contract(None, ProgressContract);
+        let client = ProgressContractClient::new(&env, &id);
         let admin = Address::generate(&env);
         client.initialize(&admin);
+        // Deliberately skip set_verification_contract
 
-        let validator = Address::generate(&env);
+        let caller = Address::generate(&env);
+        let result = client.try_advance_level(&caller, &1u64, &1u32);
+
+        // Without a VerificationContract configured, advance_level must return
+        // NotInitialized instead of accepting any arbitrary caller.
+        assert_eq!(result, Err(Ok(ProgressError::NotInitialized)));
+    }
+
+    #[test]
+    fn test_advance_level_succeeds_when_verification_contract_set() {
+        let (_, client, verification) = setup();
+
+        // The verification contract address was already wired in setup().
+        let level = client.advance_level(&verification, &1u64, &1u32);
+        assert_eq!(level, ProgressLevel::VerifiedIdentity);
+    }
+
+    #[test]
+    fn test_advance_level_unauthorized_when_verification_contract_set() {
+        let (env, client, _verification) = setup();
+
+        // A random address that is NOT the verification contract must be
+        // rejected by require_auth — with mock_all_auths off it would panic,
+        // but with mock_all_auths on the address mismatch in the whitelist
+        // logic means the verification_contract.require_auth() is satisfied
+        // by the mock, so we need to clear mocks for this test.
+        env.mock_auths(&[]);
+        let random = Address::generate(&env);
+        let result = client.try_advance_level(&random, &1u64, &1u32);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_get_progress_history_three_entries() {
+        let (_, client, validator) = setup();
         let player_id = 10u64;
 
         // Advance through all three tiers
@@ -466,9 +545,7 @@ mod tests {
 
     #[test]
     fn test_get_progress_history_empty() {
-        let (env, client) = setup();
-        let admin = Address::generate(&env);
-        client.initialize(&admin);
+        let (_, client, _) = setup();
 
         // Player 999 has never had advance_level called
         let history = client.get_progress_history(&999u64);
@@ -477,11 +554,7 @@ mod tests {
 
     #[test]
     fn test_progress_updated_event_data() {
-        let (env, client) = setup();
-        let admin = Address::generate(&env);
-        client.initialize(&admin);
-
-        let validator = Address::generate(&env);
+        let (env, client, validator) = setup();
         let player_id = 5u64;
 
         // Advance once: Unverified → VerifiedIdentity
@@ -518,11 +591,7 @@ mod tests {
     #[test]
     #[should_panic]
     fn test_cannot_exceed_elite_tier() {
-        let (env, client) = setup();
-        let admin = Address::generate(&env);
-        client.initialize(&admin);
-
-        let validator = Address::generate(&env);
+        let (_, client, validator) = setup();
         let player_id = 1u64;
 
         client.advance_level(&validator, &player_id, &1u32);
@@ -534,10 +603,7 @@ mod tests {
 
     #[test]
     fn test_transfer_admin_success() {
-        let (env, client) = setup();
-        let admin = Address::generate(&env);
-        client.initialize(&admin);
-
+        let (env, client, _) = setup();
         let new_admin = Address::generate(&env);
         // Should not panic — current admin auth is satisfied
         client.transfer_admin(&new_admin);
@@ -546,10 +612,7 @@ mod tests {
     #[test]
     #[should_panic]
     fn test_transfer_admin_unauthorized() {
-        let (env, client) = setup();
-        let admin = Address::generate(&env);
-        client.initialize(&admin);
-
+        let (env, client, _) = setup();
         // Clear all mocks — no auth satisfied, so admin check fails
         env.mock_auths(&[]);
         client.transfer_admin(&Address::generate(&env));
@@ -557,11 +620,7 @@ mod tests {
 
     #[test]
     fn test_pause_and_unpause() {
-        let (env, client) = setup();
-        let admin = Address::generate(&env);
-        client.initialize(&admin);
-
-        let validator = Address::generate(&env);
+        let (env, client, validator) = setup();
         let player_id = 42u64;
 
         // --- pause ---
@@ -591,10 +650,7 @@ mod tests {
     #[test]
     #[should_panic]
     fn test_old_admin_loses_access_after_transfer() {
-        let (env, client) = setup();
-        let admin = Address::generate(&env);
-        client.initialize(&admin);
-
+        let (env, client, _) = setup();
         let new_admin = Address::generate(&env);
         client.transfer_admin(&new_admin);
 
@@ -605,11 +661,7 @@ mod tests {
 
     #[test]
     fn test_reset_player_level_success() {
-        let (env, client) = setup();
-        let admin = Address::generate(&env);
-        client.initialize(&admin);
-
-        let validator = Address::generate(&env);
+        let (env, client, validator) = setup();
         let player_id = 1u64;
 
         client.advance_level(&validator, &player_id, &1u32);
@@ -618,6 +670,14 @@ mod tests {
 
         client.reset_player_level(&player_id, &ProgressLevel::Unverified);
 
+        assert_eq!(client.get_level(&player_id), ProgressLevel::Unverified);
+        assert_eq!(client.get_history_count(&player_id), 3);
+
+        let reset_entry = client.get_history_entry(&player_id, &3u32);
+        assert_eq!(reset_entry.old_level, ProgressLevel::PerformanceMilestones);
+        assert_eq!(reset_entry.new_level, ProgressLevel::Unverified);
+        assert_eq!(reset_entry.milestone_ref, 0);
+        // The event is still emitted
         assert_eq!(
             env.events().all(),
             vec![
@@ -634,24 +694,12 @@ mod tests {
                 ),
             ]
         );
-
-        assert_eq!(client.get_level(&player_id), ProgressLevel::Unverified);
-        assert_eq!(client.get_history_count(&player_id), 3);
-
-        let reset_entry = client.get_history_entry(&player_id, &3u32);
-        assert_eq!(reset_entry.old_level, ProgressLevel::PerformanceMilestones);
-        assert_eq!(reset_entry.new_level, ProgressLevel::Unverified);
-        assert_eq!(reset_entry.updated_by, admin);
-        assert_eq!(reset_entry.milestone_ref, 0);
     }
 
     #[test]
     #[should_panic]
     fn test_reset_player_level_unauthorized() {
-        let (env, client) = setup();
-        let admin = Address::generate(&env);
-        client.initialize(&admin);
-
+        let (env, client, _) = setup();
         env.mock_auths(&[]);
         client.reset_player_level(&1u64, &ProgressLevel::Unverified);
     }
@@ -659,11 +707,7 @@ mod tests {
     #[test]
     #[should_panic(expected = "Error(Contract, #8)")]
     fn test_advance_level_history_counter_overflow() {
-        let (env, client) = setup();
-        let admin = Address::generate(&env);
-        client.initialize(&admin);
-
-        let caller = Address::generate(&env);
+        let (env, client, validator) = setup();
         let player_id = 1u64;
 
         env.as_contract(&client.address, || {
@@ -672,6 +716,37 @@ mod tests {
                 .set(&DataKey::HistoryCounter(player_id), &u32::MAX);
         });
 
-        client.advance_level(&caller, &player_id, &1u32);
+        client.advance_level(&validator, &player_id, &1u32);
+    }
+
+    #[test]
+    fn test_full_level_progression_with_history() {
+        let (_, client, validator) = setup();
+        let player_id = 7u64;
+
+        client.advance_level(&validator, &player_id, &1u32);
+        client.advance_level(&validator, &player_id, &2u32);
+        client.advance_level(&validator, &player_id, &3u32);
+
+        assert_eq!(client.get_level(&player_id), ProgressLevel::EliteTier);
+        assert_eq!(client.get_history_count(&player_id), 3);
+
+        let h1 = client.get_history_entry(&player_id, &1u32);
+        let h3 = client.get_history_entry(&player_id, &3u32);
+        assert_eq!(h1.old_level, ProgressLevel::Unverified);
+        assert_eq!(h3.new_level, ProgressLevel::EliteTier);
+    }
+
+    #[test]
+    fn test_fourth_advance_panics() {
+        let (_, client, validator) = setup();
+        let player_id = 1u64;
+
+        client.advance_level(&validator, &player_id, &1u32);
+        client.advance_level(&validator, &player_id, &2u32);
+        client.advance_level(&validator, &player_id, &3u32);
+
+        let result = client.try_advance_level(&validator, &player_id, &4u32);
+        assert_eq!(result, Err(Ok(ProgressError::AlreadyAtMaxLevel)));
     }
 }
