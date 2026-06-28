@@ -20,4 +20,6 @@ pub enum ProgressError {
     PlayerNotFound = 7,
     /// History counter overflowed the maximum u32 value.
     Overflow = 8,
+    /// Call to registration contract failed.
+    RegistrationCallFailed = 9,
 }

@@ -6,13 +6,15 @@ mod types;
 use errors::ProgressError;
 use types::{ContractHealth, DataKey, ProgressEntry, ProgressLevel};
 
-use soroban_sdk::{contract, contractimpl, Address, Env, Vec};
+use soroban_sdk::{contract, contractimpl, Address, Env, String, Vec};
 
 const INSTANCE_TTL_MIN: u32 = 100;
 const INSTANCE_TTL_MAX: u32 = 500;
 
 const PERSISTENT_TTL_MIN: u32 = 500;
 const PERSISTENT_TTL_MAX: u32 = 2000;
+
+const CONTRACT_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 #[contract]
 pub struct ProgressContract;
@@ -32,6 +34,25 @@ impl ProgressContract {
         env.storage().instance().set(&DataKey::Admin, &admin);
         env.storage().instance().set(&DataKey::Initialized, &true);
         env.storage().instance().set(&DataKey::Paused, &false);
+        Ok(())
+    }
+
+    /// Store the verification contract address allowed to call `advance_level`.
+    /// When set, only that contract may authorize level advances (admin only).
+    pub fn set_verification_contract(env: Env, addr: Address) -> Result<(), ProgressError> {
+        Self::require_admin(&env)?;
+        env.storage()
+            .instance()
+            .set(&DataKey::VerificationContract, &addr);
+        Ok(())
+    }
+
+    /// Store the registration contract address so we can sync player levels (admin only).
+    pub fn set_registration_contract(env: Env, addr: Address) -> Result<(), ProgressError> {
+        Self::require_admin(&env)?;
+        env.storage()
+            .instance()
+            .set(&DataKey::RegistrationContract, &addr);
         Ok(())
     }
 
@@ -86,6 +107,19 @@ impl ProgressContract {
             .persistent()
             .set(&DataKey::PlayerLevel(player_id), &target_level);
 
+        // Sync to registration contract if set
+        if let Some(reg_contract) = env
+            .storage()
+            .instance()
+            .get::<DataKey, Address>(&DataKey::RegistrationContract)
+        {
+            let reg_client = registration_contract::Client::new(&env, &reg_contract);
+            match reg_client.try_set_player_level(&player_id, &target_level) {
+                Ok(Ok(())) => {}
+                _ => return Err(ProgressError::RegistrationCallFailed),
+            }
+        }
+
         events::player_level_reset(&env, player_id, &old_level, &target_level);
         Ok(())
     }
@@ -134,6 +168,19 @@ impl ProgressContract {
         env.storage()
             .persistent()
             .set(&DataKey::PlayerLevel(player_id), &new_level);
+
+        // Sync to registration contract if set
+        if let Some(reg_contract) = env
+            .storage()
+            .instance()
+            .get::<DataKey, Address>(&DataKey::RegistrationContract)
+        {
+            let reg_client = registration_contract::Client::new(&env, &reg_contract);
+            match reg_client.try_set_player_level(&player_id, &new_level) {
+                Ok(Ok(())) => {}
+                _ => return Err(ProgressError::RegistrationCallFailed),
+            }
+        }
 
         events::progress_updated(
             &env,
@@ -185,31 +232,22 @@ impl ProgressContract {
     }
 
     /// Return all history entries for a player in chronological order (index 1..=N).
-    /// Capped at 50 entries to bound gas consumption.
+    /// Reads a single persistent storage key (`HistoryVec`) regardless of entry count,
+    /// reducing gas cost from O(N) individual reads to O(1).
     /// Returns an empty Vec if the player has no history.
     pub fn get_progress_history(env: Env, player_id: u64) -> Vec<ProgressEntry> {
-        const MAX_ENTRIES: u32 = 50;
-
-        let count: u32 = env
+        let vec_key = DataKey::HistoryVec(player_id);
+        let history: Vec<ProgressEntry> = env
             .storage()
             .persistent()
-            .get(&DataKey::HistoryCounter(player_id))
-            .unwrap_or(0u32);
-
-        let limit = count.min(MAX_ENTRIES);
-        let mut entries: Vec<ProgressEntry> = Vec::new(&env);
-
-        for i in 1..=limit {
-            if let Some(entry) = env
-                .storage()
+            .get(&vec_key)
+            .unwrap_or_else(|| Vec::new(&env));
+        if !history.is_empty() {
+            env.storage()
                 .persistent()
-                .get(&DataKey::HistoryEntry(player_id, i))
-            {
-                entries.push_back(entry);
-            }
+                .extend_ttl(&vec_key, PERSISTENT_TTL_MIN, PERSISTENT_TTL_MAX);
         }
-
-        entries
+        history
     }
 
     /// Paginated history retrieval. Returns entries from `offset+1` to `offset+limit`.
@@ -315,6 +353,20 @@ impl ProgressContract {
             .persistent()
             .set(&DataKey::HistoryEntry(player_id, next_index), &entry);
         env.storage().persistent().set(&history_key, &next_index);
+
+        // Also append to the single-key Vec so get_progress_history costs O(1) reads.
+        let vec_key = DataKey::HistoryVec(player_id);
+        let mut history: Vec<ProgressEntry> = env
+            .storage()
+            .persistent()
+            .get(&vec_key)
+            .unwrap_or_else(|| Vec::new(env));
+        history.push_back(entry);
+        env.storage().persistent().set(&vec_key, &history);
+        env.storage()
+            .persistent()
+            .extend_ttl(&vec_key, PERSISTENT_TTL_MIN, PERSISTENT_TTL_MAX);
+
         Ok(())
     }
 

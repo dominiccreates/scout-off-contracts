@@ -255,6 +255,12 @@ stellar contract invoke --id $REGISTRATION_CONTRACT_ID -- get_scout_count
 Scout discovery query. Returns up to 50 player profiles matching the given
 region, position, and minimum progress level.
 
+Uses the composite `PlayersByLevelRegion(level, region)` index as the entry
+point so only players that already satisfy the level+region criteria are loaded.
+Gas cost is proportional to the number of matching players, not the total player
+count. The index is maintained automatically on `register_player`,
+`set_player_level`, and `deregister_player`.
+
 | | |
 |---|---|
 | **Auth** | None |
@@ -651,13 +657,29 @@ stellar contract invoke --id $PROGRESS_CONTRACT_ID \
 
 #### `transfer_admin(new_admin: Address) -> Result<(), ProgressError>`
 
-Transfer admin rights to a new address. The current admin loses all privileged
-access immediately.
+Transfer admin rights to `new_admin`. The current admin loses **all** privileged
+access immediately and irreversibly — there is no undo. The old admin address
+is no longer authorised to call any admin-only function after this transaction
+confirms.
+
+> ⚠️ **Irreversible**: Once transferred, only `new_admin` can call
+> `transfer_admin` again to change ownership. If `new_admin` is a lost or
+> inaccessible key, admin access to this contract is permanently lost. Verify
+> the new address before invoking.
+
+**Parameters**
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `new_admin` | `Address` | Stellar address that will become the new contract admin |
+
+**Return type**: `Result<(), ProgressError>` — `Ok(())` on success.
 
 | | |
 |---|---|
-| **Auth** | Current admin must sign |
-| **Errors** | `NotInitialized` |
+| **Auth** | Current admin must sign (`require_auth` on the stored admin address) |
+| **Errors** | `NotInitialized` if the contract has not been initialised |
+| **Emits** | `admin_transferred` — topics: `(Symbol("admin_transferred"),)`, data: `(old_admin: Address, new_admin: Address)` |
 
 ```bash
 stellar contract invoke --id $PROGRESS_CONTRACT_ID \
@@ -764,9 +786,20 @@ stellar contract invoke --id $PROGRESS_CONTRACT_ID \
 
 #### `get_progress_history(player_id: u64) -> Vec<ProgressEntry>`
 
-Return all history entries for a player in chronological order (index 1..=N),
-capped at 50 entries to bound gas consumption. Returns an empty `Vec` for
-unknown player IDs.
+Return all history entries for a player in chronological order. Internally reads
+a single `HistoryVec` persistent storage key regardless of entry count — O(1)
+reads instead of the previous O(N) loop. Returns an empty `Vec` for unknown
+player IDs.
+
+**Gas trade-off**: the Vec grows with each level change (max 3 entries per player
+given the four-tier model). Because the entire Vec is loaded in one read the cost
+is proportional to the serialised size of the Vec, not the number of reads.
+
+**Migration note**: existing deployments that only have `HistoryEntry(player_id, i)`
+keys (written before this change) will return an empty Vec from this function.
+Use `get_history_entry` with individual indices to read pre-migration data, or
+run a one-time migration script that calls `advance_level` / `reset_player_level`
+to rewrite history into the new Vec key.
 
 | | |
 |---|---|
@@ -992,6 +1025,29 @@ stellar contract invoke --id $SCOUT_ACCESS_CONTRACT_ID \
   -- pay_to_contact \
   --scout $SCOUT_ADDRESS \
   --player_id 1
+```
+
+---
+
+#### `batch_contact_players(scout: Address, player_ids: Vec<u64>) -> Result<u32, ScoutAccessError>`
+
+Contact multiple players in a single transaction. The contact fee is charged
+once per new player; already-contacted players are silently skipped (no charge).
+The total fee for all new contacts is deducted in a single token transfer.
+Returns the count of new contacts recorded.
+
+Scout must have an active (non-expired) subscription.
+
+| | |
+|---|---|
+| **Auth** | `scout` must sign |
+| **Errors** | `ContractPaused` · `NotInitialized` · `ScoutNotSubscribed` · `SubscriptionExpired` · `Overflow` |
+
+```bash
+stellar contract invoke --id $SCOUT_ACCESS_CONTRACT_ID \
+  -- batch_contact_players \
+  --scout $SCOUT_ADDRESS \
+  --player_ids '[1,2,3]'
 ```
 
 ---

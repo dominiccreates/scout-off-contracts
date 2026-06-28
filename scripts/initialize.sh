@@ -59,6 +59,39 @@ stellar contract invoke \
   -- set_progress_contract \
   --progress_contract "$PROGRESS_CONTRACT_ID"
 
+echo "==> Wiring registration ← progress cross-contract link..."
+stellar contract invoke \
+  --id "$REGISTRATION_CONTRACT_ID" \
+  --source "$DEPLOYER" \
+  --network "$NETWORK" \
+  -- set_progress_contract \
+  --addr "$PROGRESS_CONTRACT_ID"
+
+echo "==> Wiring progress → verification cross-contract link..."
+stellar contract invoke \
+  --id "$PROGRESS_CONTRACT_ID" \
+  --source "$DEPLOYER" \
+  --network "$NETWORK" \
+  -- set_verification_contract \
+  --addr "$VERIFICATION_CONTRACT_ID"
+
+echo "==> Wiring progress → registration cross-contract link..."
+stellar contract invoke \
+  --id "$PROGRESS_CONTRACT_ID" \
+  --source "$DEPLOYER" \
+  --network "$NETWORK" \
+  -- set_registration_contract \
+  --addr "$REGISTRATION_CONTRACT_ID"
+
+echo "==> Wiring scout_access → progress cross-contract link..."
+stellar contract invoke \
+  --id "$SCOUT_ACCESS_CONTRACT_ID" \
+  --source "$DEPLOYER" \
+  --network "$NETWORK" \
+  -- set_progress_contract \
+  --addr "$PROGRESS_CONTRACT_ID"
+
+
 echo ""
 echo "==> Querying deployed contract versions..."
 for entry in \

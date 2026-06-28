@@ -41,6 +41,11 @@ pub enum DataKey {
     /// Stores a [`ProgressEntry`] for a specific `(player_id, history_index)`
     /// pair. Indices start at `1` and are assigned by [`HistoryCounter`].
     HistoryEntry(u64, u32),
+    /// Stores **all** history entries for a player as a single `Vec<ProgressEntry>`.
+    /// Reading this key costs one persistent storage read regardless of entry count,
+    /// replacing the O(N) loop in `get_progress_history`. Written in parallel with
+    /// [`HistoryEntry`] so both access patterns remain valid.
+    HistoryVec(u64),
     /// The `Address` of the companion verification contract. Reserved for
     /// future cross-contract authorisation checks; not yet written at runtime.
     VerificationContract,

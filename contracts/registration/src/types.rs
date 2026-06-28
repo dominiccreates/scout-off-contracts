@@ -72,4 +72,8 @@ pub enum DataKey {
     PlayerIndex,
     /// Address of the progress contract allowed to call set_player_level
     ProgressContract,
+    /// Composite index: (ProgressLevel, region) → Vec<u64> of player IDs.
+    /// Used by `filter_players` for combined level+region queries so only
+    /// matching players are loaded, avoiding a full scan of `PlayerIndex`.
+    PlayersByLevelRegion(ProgressLevel, String),
 }

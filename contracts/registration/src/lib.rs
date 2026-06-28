@@ -4,13 +4,17 @@ mod events;
 mod types;
 
 use errors::ScoutChainError;
-use types::{ContractHealth, DataKey, PlayerProfile, PlayerVitals, ProgressLevel, ScoutProfile};
+use types::{
+    ContractHealth, DataKey, PlayerProfile, PlayerSummary, PlayerVitals, ProgressLevel,
+    ScoutProfile,
+};
 
 use soroban_sdk::{contract, contractimpl, Address, Env, String, Vec};
 
 const MAX_REGION_LEN: u32 = 128;
 const MAX_STRING_LEN: u32 = 64;
 const MAX_IPFS_HASHES: u32 = 10;
+const MAX_BATCH_SIZE: u32 = 20;
 const CONTRACT_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 #[contract]
@@ -71,6 +75,13 @@ impl RegistrationContract {
         progress_contract.require_auth();
 
         let mut profile = Self::load_player(&env, player_id)?;
+        let old_level = profile.level.clone();
+        let region = profile.vitals.region.clone();
+
+        // Update composite index: remove from old bucket, add to new bucket
+        Self::composite_index_remove(&env, &old_level, &region, player_id);
+        Self::composite_index_add(&env, &level, &region, player_id);
+
         profile.level = level;
         profile.updated_at = env.ledger().timestamp();
         env.storage()
@@ -149,6 +160,9 @@ impl RegistrationContract {
             .persistent()
             .set(&DataKey::PlayerIndex, &player_ids);
 
+        // Add to composite (level, region) index — starts at Unverified
+        Self::composite_index_add(&env, &ProgressLevel::Unverified, &profile.vitals.region, player_id);
+
         events::player_registered(&env, player_id, &wallet);
         Ok(player_id)
     }
@@ -197,6 +211,9 @@ impl RegistrationContract {
                 .persistent()
                 .set(&DataKey::PlayerIndex, &player_ids);
         }
+
+        // Remove from composite index
+        Self::composite_index_remove(&env, &profile.level, &profile.vitals.region, player_id);
 
         events::player_deregistered(&env, player_id);
         Ok(())
@@ -257,10 +274,7 @@ impl RegistrationContract {
     }
 
     /// Return a lightweight player summary without IPFS hashes or wallet.
-    pub fn get_player_summary(
-        env: Env,
-        player_id: u64,
-    ) -> Result<PlayerSummary, ScoutChainError> {
+    pub fn get_player_summary(env: Env, player_id: u64) -> Result<PlayerSummary, ScoutChainError> {
         let profile = Self::load_player(&env, player_id)?;
         Ok(Self::to_player_summary(&profile))
     }
@@ -366,6 +380,8 @@ impl RegistrationContract {
     }
 
     /// Filter players by region, position, and minimum progress level.
+    /// Uses the composite `PlayersByLevelRegion` index for level+region lookups,
+    /// so gas cost is proportional to matching results, not total player count.
     /// Returns at most 50 results to bound gas usage.
     pub fn filter_players(
         env: Env,
@@ -375,27 +391,41 @@ impl RegistrationContract {
     ) -> Result<Vec<PlayerProfile>, ScoutChainError> {
         Self::require_initialized(&env)?;
 
-        let player_ids: Vec<u64> = env
-            .storage()
-            .persistent()
-            .get(&DataKey::PlayerIndex)
-            .unwrap_or_else(|| Vec::new(&env));
+        // Collect candidate player IDs from composite index buckets.
+        // We query every level bucket >= min_level for this region.
+        let levels: [ProgressLevel; 4] = [
+            ProgressLevel::Unverified,
+            ProgressLevel::VerifiedIdentity,
+            ProgressLevel::PerformanceMilestones,
+            ProgressLevel::EliteTier,
+        ];
 
         let mut results = Vec::new(&env);
         let max_results = 50u32;
 
-        for player_id in player_ids.iter() {
-            if results.len() >= max_results {
-                break;
+        for level in levels.iter() {
+            if !Self::level_gte(level, &min_level) {
+                continue;
+            }
+            let ids: Vec<u64> = env
+                .storage()
+                .persistent()
+                .get(&DataKey::PlayersByLevelRegion(level.clone(), region.clone()))
+                .unwrap_or_else(|| Vec::new(&env));
+
+            for player_id in ids.iter() {
+                if results.len() >= max_results {
+                    break;
+                }
+                if let Ok(profile) = Self::load_player(&env, player_id) {
+                    if profile.vitals.position == position {
+                        results.push_back(profile);
+                    }
+                }
             }
 
-            if let Ok(profile) = Self::load_player(&env, player_id) {
-                if profile.vitals.region == region
-                    && profile.vitals.position == position
-                    && Self::level_gte(&profile.level, &min_level)
-                {
-                    results.push_back(profile);
-                }
+            if results.len() >= max_results {
+                break;
             }
         }
 
@@ -513,6 +543,32 @@ impl RegistrationContract {
                 | (ProgressLevel::EliteTier, ProgressLevel::EliteTier)
         )
     }
+
+    /// Add `player_id` to the composite (level, region) index bucket.
+    fn composite_index_add(env: &Env, level: &ProgressLevel, region: &String, player_id: u64) {
+        let key = DataKey::PlayersByLevelRegion(level.clone(), region.clone());
+        let mut ids: Vec<u64> = env
+            .storage()
+            .persistent()
+            .get(&key)
+            .unwrap_or_else(|| Vec::new(env));
+        ids.push_back(player_id);
+        env.storage().persistent().set(&key, &ids);
+    }
+
+    /// Remove `player_id` from the composite (level, region) index bucket.
+    fn composite_index_remove(env: &Env, level: &ProgressLevel, region: &String, player_id: u64) {
+        let key = DataKey::PlayersByLevelRegion(level.clone(), region.clone());
+        let mut ids: Vec<u64> = env
+            .storage()
+            .persistent()
+            .get(&key)
+            .unwrap_or_else(|| Vec::new(env));
+        if let Some(pos) = ids.iter().position(|id| id == player_id) {
+            ids.remove(pos as u32);
+            env.storage().persistent().set(&key, &ids);
+        }
+    }
 }
 
 // =============================================================================
@@ -526,7 +582,7 @@ mod tests {
     fn setup() -> (Env, RegistrationContractClient<'static>) {
         let env = Env::default();
         env.mock_all_auths();
-        let contract_id = env.register_contract(None, RegistrationContract);
+        let contract_id = env.register(RegistrationContract, ());
         let client = RegistrationContractClient::new(&env, &contract_id);
         (env, client)
     }
@@ -877,13 +933,13 @@ mod tests {
 
     #[test]
     fn test_get_player_count_returns_zero_before_init() {
-        let (env, client) = setup();
+        let (_env, client) = setup();
         assert_eq!(client.get_player_count(), 0);
     }
 
     #[test]
     fn test_get_scout_count_returns_zero_before_init() {
-        let (env, client) = setup();
+        let (_env, client) = setup();
         assert_eq!(client.get_scout_count(), 0);
     }
 
@@ -1062,5 +1118,69 @@ mod tests {
 
         // Step 5: Verify timestamps
         assert!(profile_v2.updated_at >= updated_at_v1);
+    }
+
+    #[test]
+    fn test_full_milestone_approval_flow_integration() {
+        use scoutchain_progress::{ProgressContract, ProgressContractClient};
+        use scoutchain_verification::{VerificationContract, VerificationContractClient};
+        use soroban_sdk::testutils::Ledger;
+
+        let env = Env::default();
+        env.mock_all_auths();
+        env.ledger().with_mut(|l| {
+            l.sequence_number = 1;
+        });
+
+        let admin = Address::generate(&env);
+
+        // 1. Deploy registration contract
+        let reg_id = env.register(RegistrationContract, ());
+        let reg_client = RegistrationContractClient::new(&env, &reg_id);
+        reg_client.initialize(&admin);
+
+        // 2. Deploy progress contract
+        let prog_id = env.register(ProgressContract, ());
+        let prog_client = ProgressContractClient::new(&env, &prog_id);
+        prog_client.initialize(&admin);
+
+        // 3. Deploy verification contract
+        let ver_id = env.register(VerificationContract, ());
+        let ver_client = VerificationContractClient::new(&env, &ver_id);
+        ver_client.initialize(&admin);
+
+        // 4. Wire verification -> progress
+        ver_client.set_progress_contract(&prog_id);
+
+        // 5. Wire progress -> verification
+        prog_client.set_verification_contract(&ver_id);
+
+        // 6. Wire progress -> registration
+        prog_client.set_registration_contract(&reg_id);
+
+        // 7. Wire registration <- progress
+        reg_client.set_progress_contract(&prog_id);
+
+        // 8. Register player in registration contract
+        let player_wallet = Address::generate(&env);
+        let vitals = dummy_vitals(&env);
+        let hashes = vec![&env, String::from_str(&env, "QmPlayerEvidence")];
+        let player_id = reg_client.register_player(&player_wallet, &vitals, &hashes);
+
+        // 9. Register validator in verification contract
+        let validator = Address::generate(&env);
+        ver_client.register_validator(&validator, &String::from_str(&env, "UEFA B License"));
+
+        // 10. Approve milestone via verification contract (this triggers the cross-contract flow)
+        ver_client.approve_milestone(
+            &validator,
+            &player_id,
+            &String::from_str(&env, "Completed Level 1 requirements"),
+            &String::from_str(&env, "QmEvidenceHash123"),
+        );
+
+        // 11. Assert that the player's level is now VerifiedIdentity in registration contract
+        let profile = reg_client.get_player(&player_id);
+        assert_eq!(profile.level, ProgressLevel::VerifiedIdentity);
     }
 }
