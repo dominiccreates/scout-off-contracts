@@ -1185,6 +1185,105 @@ mod tests {
     }
 
     // -------------------------------------------------------------------------
+    // Pause / unpause behaviour
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn test_register_player_while_paused_returns_contract_paused() {
+        let (env, client) = setup();
+        let admin = Address::generate(&env);
+        client.initialize(&admin);
+        client.pause_contract();
+
+        let wallet = Address::generate(&env);
+        let vitals = dummy_vitals(&env);
+        let hashes = vec![&env, String::from_str(&env, "QmTest")];
+
+        let result = client.try_register_player(&wallet, &vitals, &hashes);
+        assert_eq!(result, Err(Ok(ScoutChainError::ContractPaused)));
+    }
+
+    #[test]
+    fn test_register_scout_while_paused_returns_contract_paused() {
+        let (env, client) = setup();
+        let admin = Address::generate(&env);
+        client.initialize(&admin);
+        client.pause_contract();
+
+        let wallet = Address::generate(&env);
+        let region = String::from_str(&env, "Europe");
+
+        let result = client.try_register_scout(&wallet, &region);
+        assert_eq!(result, Err(Ok(ScoutChainError::ContractPaused)));
+    }
+
+    #[test]
+    fn test_update_profile_while_paused_returns_contract_paused() {
+        let (env, client) = setup();
+        let admin = Address::generate(&env);
+        client.initialize(&admin);
+
+        // Register the player before pausing so the player exists.
+        let wallet = Address::generate(&env);
+        let vitals = dummy_vitals(&env);
+        let hashes = vec![&env, String::from_str(&env, "QmOld")];
+        let player_id = client.register_player(&wallet, &vitals, &hashes);
+
+        client.pause_contract();
+
+        let new_hashes = vec![&env, String::from_str(&env, "QmNew")];
+        let result = client.try_update_profile(&player_id, &new_hashes);
+        assert_eq!(result, Err(Ok(ScoutChainError::ContractPaused)));
+    }
+
+    #[test]
+    fn test_admin_functions_succeed_while_paused() {
+        let (env, client) = setup();
+        let admin = Address::generate(&env);
+        client.initialize(&admin);
+
+        // Register a player and a scout before pausing.
+        let player_wallet = Address::generate(&env);
+        let vitals = dummy_vitals(&env);
+        let hashes = vec![&env, String::from_str(&env, "QmTest")];
+        let player_id = client.register_player(&player_wallet, &vitals, &hashes);
+
+        let scout_wallet = Address::generate(&env);
+        let region = String::from_str(&env, "Europe");
+        let scout_id = client.register_scout(&scout_wallet, &region);
+
+        client.pause_contract();
+
+        // deregister_player and verify_scout are admin-only and must bypass the pause.
+        assert_eq!(client.try_deregister_player(&player_id), Ok(Ok(())));
+        assert_eq!(client.try_verify_scout(&scout_id), Ok(Ok(())));
+    }
+
+    #[test]
+    fn test_register_player_succeeds_after_unpause() {
+        let (env, client) = setup();
+        let admin = Address::generate(&env);
+        client.initialize(&admin);
+
+        client.pause_contract();
+
+        // Confirm the contract is paused.
+        let wallet = Address::generate(&env);
+        let vitals = dummy_vitals(&env);
+        let hashes = vec![&env, String::from_str(&env, "QmTest")];
+        assert_eq!(
+            client.try_register_player(&wallet, &vitals, &hashes),
+            Err(Ok(ScoutChainError::ContractPaused))
+        );
+
+        client.unpause_contract();
+
+        // After unpausing, registration must succeed again.
+        let player_id = client.register_player(&wallet, &vitals, &hashes);
+        assert_eq!(player_id, 1);
+    }
+
+    // -------------------------------------------------------------------------
     // Issue #33: Full player registration and profile update flow
     // -------------------------------------------------------------------------
 
