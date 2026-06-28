@@ -4,7 +4,8 @@ mod events;
 mod types;
 
 use errors::ScoutAccessError;
-use types::{DataKey, FeeConfig, Subscription, SubscriptionTier, TrialOffer};
+use types::{DataKey, Subscription, TrialOffer};
+pub use types::{FeeConfig, SubscriptionTier};
 
 use soroban_sdk::{contract, contractimpl, token, Address, Env, String};
 
