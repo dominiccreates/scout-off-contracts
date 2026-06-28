@@ -47,4 +47,5 @@ pub enum DataKey {
     Milestone(u64, u32),
     ValidatorMilestoneCount(Address),
     ValidatorVector,
+    TotalMilestoneCount,
 }

@@ -302,6 +302,22 @@ impl ScoutAccessContract {
             PERSISTENT_TTL_MIN,
             PERSISTENT_TTL_MAX,
         );
+
+        // Update scout-centric contact index
+        let index_key = DataKey::ScoutContacts(scout.clone());
+        let mut contacted: soroban_sdk::Vec<u64> = env
+            .storage()
+            .persistent()
+            .get(&index_key)
+            .unwrap_or_else(|| soroban_sdk::Vec::new(&env));
+        if !contacted.contains(&player_id) {
+            contacted.push_back(player_id);
+        }
+        env.storage().persistent().set(&index_key, &contacted);
+        env.storage()
+            .persistent()
+            .extend_ttl(&index_key, PERSISTENT_TTL_MIN, PERSISTENT_TTL_MAX);
+
         events::player_contacted(&env, player_id, &scout, config.contact_fee_stroops);
         Ok(())
     }
@@ -501,6 +517,23 @@ impl ScoutAccessContract {
         exists
     }
 
+    /// Return all player_ids contacted by `scout` as an O(1) index lookup.
+    pub fn get_scout_contacts(env: Env, scout: Address) -> soroban_sdk::Vec<u64> {
+        Self::bump_instance_ttl(&env);
+        let key = DataKey::ScoutContacts(scout.clone());
+        let list = env
+            .storage()
+            .persistent()
+            .get(&key)
+            .unwrap_or_else(|| soroban_sdk::Vec::new(&env));
+        if !list.is_empty() {
+            env.storage()
+                .persistent()
+                .extend_ttl(&key, PERSISTENT_TTL_MIN, PERSISTENT_TTL_MAX);
+        }
+        list
+    }
+
     pub fn get_trial_offer(
         env: Env,
         player_id: u64,
@@ -535,6 +568,32 @@ impl ScoutAccessContract {
             );
         }
         count
+    }
+
+    /// Return all trial offers for a player in a single call.
+    /// Bounded at 20 to prevent gas exhaustion. Returns empty Vec for no offers.
+    pub fn get_all_trial_offers(env: Env, player_id: u64) -> soroban_sdk::Vec<TrialOffer> {
+        const MAX_OFFERS: u32 = 20;
+        Self::bump_instance_ttl(&env);
+
+        let count: u32 = env
+            .storage()
+            .persistent()
+            .get(&DataKey::TrialCounter(player_id))
+            .unwrap_or(0u32);
+
+        let limit = count.min(MAX_OFFERS);
+        let mut offers: soroban_sdk::Vec<TrialOffer> = soroban_sdk::Vec::new(&env);
+        for i in 1..=limit {
+            if let Some(offer) = env
+                .storage()
+                .persistent()
+                .get(&DataKey::TrialOffer(player_id, i))
+            {
+                offers.push_back(offer);
+            }
+        }
+        offers
     }
 
     pub fn health(env: Env) -> ContractHealth {
