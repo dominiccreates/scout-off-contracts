@@ -75,6 +75,13 @@ impl RegistrationContract {
         progress_contract.require_auth();
 
         let mut profile = Self::load_player(&env, player_id)?;
+        let old_level = profile.level.clone();
+        let region = profile.vitals.region.clone();
+
+        // Update composite index: remove from old bucket, add to new bucket
+        Self::composite_index_remove(&env, &old_level, &region, player_id);
+        Self::composite_index_add(&env, &level, &region, player_id);
+
         profile.level = level;
         profile.updated_at = env.ledger().timestamp();
         env.storage()
@@ -153,6 +160,9 @@ impl RegistrationContract {
             .persistent()
             .set(&DataKey::PlayerIndex, &player_ids);
 
+        // Add to composite (level, region) index — starts at Unverified
+        Self::composite_index_add(&env, &ProgressLevel::Unverified, &profile.vitals.region, player_id);
+
         events::player_registered(&env, player_id, &wallet);
         Ok(player_id)
     }
@@ -201,6 +211,9 @@ impl RegistrationContract {
                 .persistent()
                 .set(&DataKey::PlayerIndex, &player_ids);
         }
+
+        // Remove from composite index
+        Self::composite_index_remove(&env, &profile.level, &profile.vitals.region, player_id);
 
         events::player_deregistered(&env, player_id);
         Ok(())
@@ -367,6 +380,8 @@ impl RegistrationContract {
     }
 
     /// Filter players by region, position, and minimum progress level.
+    /// Uses the composite `PlayersByLevelRegion` index for level+region lookups,
+    /// so gas cost is proportional to matching results, not total player count.
     /// Returns at most 50 results to bound gas usage.
     pub fn filter_players(
         env: Env,
@@ -376,27 +391,41 @@ impl RegistrationContract {
     ) -> Result<Vec<PlayerProfile>, ScoutChainError> {
         Self::require_initialized(&env)?;
 
-        let player_ids: Vec<u64> = env
-            .storage()
-            .persistent()
-            .get(&DataKey::PlayerIndex)
-            .unwrap_or_else(|| Vec::new(&env));
+        // Collect candidate player IDs from composite index buckets.
+        // We query every level bucket >= min_level for this region.
+        let levels: [ProgressLevel; 4] = [
+            ProgressLevel::Unverified,
+            ProgressLevel::VerifiedIdentity,
+            ProgressLevel::PerformanceMilestones,
+            ProgressLevel::EliteTier,
+        ];
 
         let mut results = Vec::new(&env);
         let max_results = 50u32;
 
-        for player_id in player_ids.iter() {
-            if results.len() >= max_results {
-                break;
+        for level in levels.iter() {
+            if !Self::level_gte(level, &min_level) {
+                continue;
+            }
+            let ids: Vec<u64> = env
+                .storage()
+                .persistent()
+                .get(&DataKey::PlayersByLevelRegion(level.clone(), region.clone()))
+                .unwrap_or_else(|| Vec::new(&env));
+
+            for player_id in ids.iter() {
+                if results.len() >= max_results {
+                    break;
+                }
+                if let Ok(profile) = Self::load_player(&env, player_id) {
+                    if profile.vitals.position == position {
+                        results.push_back(profile);
+                    }
+                }
             }
 
-            if let Ok(profile) = Self::load_player(&env, player_id) {
-                if profile.vitals.region == region
-                    && profile.vitals.position == position
-                    && Self::level_gte(&profile.level, &min_level)
-                {
-                    results.push_back(profile);
-                }
+            if results.len() >= max_results {
+                break;
             }
         }
 
@@ -513,6 +542,32 @@ impl RegistrationContract {
                 )
                 | (ProgressLevel::EliteTier, ProgressLevel::EliteTier)
         )
+    }
+
+    /// Add `player_id` to the composite (level, region) index bucket.
+    fn composite_index_add(env: &Env, level: &ProgressLevel, region: &String, player_id: u64) {
+        let key = DataKey::PlayersByLevelRegion(level.clone(), region.clone());
+        let mut ids: Vec<u64> = env
+            .storage()
+            .persistent()
+            .get(&key)
+            .unwrap_or_else(|| Vec::new(env));
+        ids.push_back(player_id);
+        env.storage().persistent().set(&key, &ids);
+    }
+
+    /// Remove `player_id` from the composite (level, region) index bucket.
+    fn composite_index_remove(env: &Env, level: &ProgressLevel, region: &String, player_id: u64) {
+        let key = DataKey::PlayersByLevelRegion(level.clone(), region.clone());
+        let mut ids: Vec<u64> = env
+            .storage()
+            .persistent()
+            .get(&key)
+            .unwrap_or_else(|| Vec::new(env));
+        if let Some(pos) = ids.iter().position(|id| id == player_id) {
+            ids.remove(pos as u32);
+            env.storage().persistent().set(&key, &ids);
+        }
     }
 }
 
