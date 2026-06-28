@@ -76,6 +76,9 @@ impl VerificationContract {
         env.storage().instance().set(&DataKey::Admin, &admin);
         env.storage().instance().set(&DataKey::Initialized, &true);
         env.storage().instance().set(&DataKey::Paused, &false);
+        env.storage()
+            .instance()
+            .set(&DataKey::TotalMilestoneCount, &0u32);
         events::contract_initialized(&env, &admin);
         Ok(())
     }
@@ -296,6 +299,16 @@ impl VerificationContract {
             .persistent()
             .set(&val_key, &(val_count.checked_add(1).expect("overflow")));
 
+        // Increment global total milestone count
+        let total: u32 = env
+            .storage()
+            .instance()
+            .get(&DataKey::TotalMilestoneCount)
+            .unwrap_or(0u32);
+        env.storage()
+            .instance()
+            .set(&DataKey::TotalMilestoneCount, &(total.checked_add(1).ok_or(VerificationError::Overflow)?));
+
         events::milestone_approved(
             &env,
             player_id,
@@ -353,6 +366,13 @@ impl VerificationContract {
         env.storage()
             .persistent()
             .get(&DataKey::ValidatorMilestoneCount(wallet))
+            .unwrap_or(0u32)
+    }
+
+    pub fn get_total_milestone_count(env: Env) -> u32 {
+        env.storage()
+            .instance()
+            .get(&DataKey::TotalMilestoneCount)
             .unwrap_or(0u32)
     }
 
@@ -478,6 +498,32 @@ mod tests {
         }
 
         assert_eq!(client.get_validator_milestone_count(&validator), 3);
+    }
+
+    #[test]
+    fn test_total_milestone_count() {
+        let (env, client) = setup();
+        let admin = Address::generate(&env);
+        client.initialize(&admin);
+
+        // Initialized to 0
+        assert_eq!(client.get_total_milestone_count(), 0);
+
+        let v1 = Address::generate(&env);
+        let v2 = Address::generate(&env);
+        client.register_validator(&v1, &String::from_str(&env, "Coach A"));
+        client.register_validator(&v2, &String::from_str(&env, "Coach B"));
+
+        client.approve_milestone(&v1, &1u64, &String::from_str(&env, "m1"), &String::from_str(&env, "QmEv1"));
+        assert_eq!(client.get_total_milestone_count(), 1);
+
+        client.approve_milestone(&v1, &2u64, &String::from_str(&env, "m2"), &String::from_str(&env, "QmEv2"));
+        client.approve_milestone(&v2, &3u64, &String::from_str(&env, "m3"), &String::from_str(&env, "QmEv3"));
+        assert_eq!(client.get_total_milestone_count(), 3);
+
+        // per-validator counts still correct
+        assert_eq!(client.get_validator_milestone_count(&v1), 2);
+        assert_eq!(client.get_validator_milestone_count(&v2), 1);
     }
 
     #[test]

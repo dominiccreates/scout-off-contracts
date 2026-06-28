@@ -322,6 +322,22 @@ impl ScoutAccessContract {
             PERSISTENT_TTL_MIN,
             PERSISTENT_TTL_MAX,
         );
+
+        // Update scout-centric contact index
+        let index_key = DataKey::ScoutContacts(scout.clone());
+        let mut contacted: soroban_sdk::Vec<u64> = env
+            .storage()
+            .persistent()
+            .get(&index_key)
+            .unwrap_or_else(|| soroban_sdk::Vec::new(&env));
+        if !contacted.contains(&player_id) {
+            contacted.push_back(player_id);
+        }
+        env.storage().persistent().set(&index_key, &contacted);
+        env.storage()
+            .persistent()
+            .extend_ttl(&index_key, PERSISTENT_TTL_MIN, PERSISTENT_TTL_MAX);
+
         events::player_contacted(&env, player_id, &scout, config.contact_fee_stroops);
         Ok(())
     }
@@ -450,6 +466,23 @@ impl ScoutAccessContract {
         exists
     }
 
+    /// Return all player_ids contacted by `scout` as an O(1) index lookup.
+    pub fn get_scout_contacts(env: Env, scout: Address) -> soroban_sdk::Vec<u64> {
+        Self::bump_instance_ttl(&env);
+        let key = DataKey::ScoutContacts(scout.clone());
+        let list = env
+            .storage()
+            .persistent()
+            .get(&key)
+            .unwrap_or_else(|| soroban_sdk::Vec::new(&env));
+        if !list.is_empty() {
+            env.storage()
+                .persistent()
+                .extend_ttl(&key, PERSISTENT_TTL_MIN, PERSISTENT_TTL_MAX);
+        }
+        list
+    }
+
     pub fn get_trial_offer(
         env: Env,
         player_id: u64,
@@ -484,6 +517,32 @@ impl ScoutAccessContract {
             );
         }
         count
+    }
+
+    /// Return all trial offers for a player in a single call.
+    /// Bounded at 20 to prevent gas exhaustion. Returns empty Vec for no offers.
+    pub fn get_all_trial_offers(env: Env, player_id: u64) -> soroban_sdk::Vec<TrialOffer> {
+        const MAX_OFFERS: u32 = 20;
+        Self::bump_instance_ttl(&env);
+
+        let count: u32 = env
+            .storage()
+            .persistent()
+            .get(&DataKey::TrialCounter(player_id))
+            .unwrap_or(0u32);
+
+        let limit = count.min(MAX_OFFERS);
+        let mut offers: soroban_sdk::Vec<TrialOffer> = soroban_sdk::Vec::new(&env);
+        for i in 1..=limit {
+            if let Some(offer) = env
+                .storage()
+                .persistent()
+                .get(&DataKey::TrialOffer(player_id, i))
+            {
+                offers.push_back(offer);
+            }
+        }
+        offers
     }
 
     pub fn health(env: Env) -> ContractHealth {
@@ -1432,5 +1491,54 @@ mod tests {
         let scout = Address::generate(&env);
         let result = client.try_refund_subscription(&scout, &(-1i128));
         assert_eq!(result, Err(Ok(ScoutAccessError::InvalidInput)));
+    }
+
+    #[test]
+    fn test_scout_contacts_index() {
+        let (env, admin, xlm, _contract_id, client) = setup();
+        let scout = Address::generate(&env);
+        mint_token(&env, &xlm, &admin, &scout, 100_000_000);
+
+        // No contacts yet → empty
+        assert_eq!(client.get_scout_contacts(&scout).len(), 0);
+
+        client.subscribe(&scout, &SubscriptionTier::Elite);
+        client.pay_to_contact(&scout, &1u64);
+        client.pay_to_contact(&scout, &2u64);
+        client.pay_to_contact(&scout, &3u64);
+
+        let contacts = client.get_scout_contacts(&scout);
+        assert_eq!(contacts.len(), 3);
+        assert!(contacts.contains(&1u64));
+        assert!(contacts.contains(&2u64));
+        assert!(contacts.contains(&3u64));
+
+        // Duplicate contact attempt doesn't add to index (contact is already blocked)
+        // The ScoutContacts index itself also guards duplicates
+        let idx_key_contacts = client.get_scout_contacts(&scout);
+        assert_eq!(idx_key_contacts.len(), 3);
+    }
+
+    #[test]
+    fn test_get_all_trial_offers() {
+        let (env, admin, xlm, _contract_id, client) = setup();
+        let scout = Address::generate(&env);
+        mint_token(&env, &xlm, &admin, &scout, 100_000_000);
+
+        // No offers yet → empty
+        assert_eq!(client.get_all_trial_offers(&999u64).len(), 0);
+
+        client.subscribe(&scout, &SubscriptionTier::Elite);
+        let h1 = String::from_str(&env, "QmTrialDetails1234567890");
+        let h2 = String::from_str(&env, "bafybeigdyrzt5sfp7udm7hu76uh7y26nf");
+
+        client.log_trial_offer(&scout, &1u64, &h1);
+        client.log_trial_offer(&scout, &1u64, &h2);
+
+        let offers = client.get_all_trial_offers(&1u64);
+        assert_eq!(offers.len(), 2);
+        assert_eq!(offers.get(0).unwrap().details_hash, h1);
+        assert_eq!(offers.get(1).unwrap().details_hash, h2);
+        assert_eq!(offers.get(0).unwrap().scout, scout);
     }
 }

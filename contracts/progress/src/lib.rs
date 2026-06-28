@@ -212,6 +212,43 @@ impl ProgressContract {
         entries
     }
 
+    /// Paginated history retrieval. Returns entries from `offset+1` to `offset+limit`.
+    /// `limit` is capped at 50. Returns an empty Vec when `offset` >= total count.
+    pub fn get_progress_history_page(
+        env: Env,
+        player_id: u64,
+        offset: u32,
+        limit: u32,
+    ) -> Vec<ProgressEntry> {
+        const MAX_PAGE: u32 = 50;
+
+        let count: u32 = env
+            .storage()
+            .persistent()
+            .get(&DataKey::HistoryCounter(player_id))
+            .unwrap_or(0u32);
+
+        if offset >= count {
+            return Vec::new(&env);
+        }
+
+        let effective_limit = limit.min(MAX_PAGE);
+        let start = offset + 1; // entries are 1-indexed
+        let end = (start + effective_limit - 1).min(count);
+
+        let mut entries: Vec<ProgressEntry> = Vec::new(&env);
+        for i in start..=end {
+            if let Some(entry) = env
+                .storage()
+                .persistent()
+                .get(&DataKey::HistoryEntry(player_id, i))
+            {
+                entries.push_back(entry);
+            }
+        }
+        entries
+    }
+
     pub fn health(env: Env) -> ContractHealth {
         Self::bump_instance_ttl(&env);
         let initialized = env
@@ -473,6 +510,41 @@ mod tests {
         // Player 999 has never had advance_level called
         let history = client.get_progress_history(&999u64);
         assert_eq!(history.len(), 0);
+    }
+
+    #[test]
+    fn test_get_progress_history_page() {
+        let (env, client) = setup();
+        let admin = Address::generate(&env);
+        client.initialize(&admin);
+
+        let validator = Address::generate(&env);
+        let player_id = 20u64;
+
+        // Advance through all 3 tiers
+        client.advance_level(&validator, &player_id, &1u32);
+        client.advance_level(&validator, &player_id, &2u32);
+        client.advance_level(&validator, &player_id, &3u32);
+
+        // First page: offset=0, limit=2 → entries 1,2
+        let page1 = client.get_progress_history_page(&player_id, &0u32, &2u32);
+        assert_eq!(page1.len(), 2);
+        assert_eq!(page1.get(0).unwrap().old_level, ProgressLevel::Unverified);
+        assert_eq!(page1.get(1).unwrap().old_level, ProgressLevel::VerifiedIdentity);
+
+        // Middle page: offset=1, limit=1 → entry 2
+        let mid = client.get_progress_history_page(&player_id, &1u32, &1u32);
+        assert_eq!(mid.len(), 1);
+        assert_eq!(mid.get(0).unwrap().old_level, ProgressLevel::VerifiedIdentity);
+
+        // Last page: offset=2, limit=50 → entry 3 only
+        let last = client.get_progress_history_page(&player_id, &2u32, &50u32);
+        assert_eq!(last.len(), 1);
+        assert_eq!(last.get(0).unwrap().new_level, ProgressLevel::EliteTier);
+
+        // Offset beyond count → empty
+        let empty = client.get_progress_history_page(&player_id, &10u32, &5u32);
+        assert_eq!(empty.len(), 0);
     }
 
     #[test]
