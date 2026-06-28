@@ -6,7 +6,39 @@ mod types;
 use errors::ProgressError;
 use types::{ContractHealth, DataKey, ProgressEntry, ProgressLevel};
 
-use soroban_sdk::{contract, contractimpl, Address, Env, Vec};
+use soroban_sdk::{contract, contractimpl, Address, Env, String, Vec};
+
+const CONTRACT_VERSION: &str = env!("CARGO_PKG_VERSION");
+
+mod registration_contract {
+    use scoutchain_shared_types::ProgressLevel;
+    use soroban_sdk::{contractclient, contracterror, Address, Env};
+
+    #[contracterror]
+    #[derive(Copy, Clone, Debug, PartialEq)]
+    #[repr(u32)]
+    pub enum Error {
+        AlreadyInitialized = 1,
+        NotInitialized = 2,
+        PlayerNotFound = 3,
+        ValidatorNotAuthorized = 4,
+        InvalidProgressTransition = 5,
+        ScoutNotSubscribed = 6,
+        InsufficientFee = 7,
+        AlreadyRegistered = 8,
+        ContractPaused = 9,
+        Unauthorized = 10,
+        Overflow = 11,
+        ScoutNotFound = 12,
+        InvalidInput = 13,
+    }
+
+    #[contractclient(name = "Client")]
+    #[allow(dead_code)]
+    pub trait RegistrationContractClient {
+        fn set_player_level(env: Env, player_id: u64, level: ProgressLevel) -> Result<(), Error>;
+    }
+}
 
 const INSTANCE_TTL_MIN: u32 = 100;
 const INSTANCE_TTL_MAX: u32 = 500;
@@ -32,6 +64,25 @@ impl ProgressContract {
         env.storage().instance().set(&DataKey::Admin, &admin);
         env.storage().instance().set(&DataKey::Initialized, &true);
         env.storage().instance().set(&DataKey::Paused, &false);
+        Ok(())
+    }
+
+    /// Store the verification contract address allowed to call `advance_level`.
+    /// When set, only that contract may authorize level advances (admin only).
+    pub fn set_verification_contract(env: Env, addr: Address) -> Result<(), ProgressError> {
+        Self::require_admin(&env)?;
+        env.storage()
+            .instance()
+            .set(&DataKey::VerificationContract, &addr);
+        Ok(())
+    }
+
+    /// Store the registration contract address so we can sync player levels (admin only).
+    pub fn set_registration_contract(env: Env, addr: Address) -> Result<(), ProgressError> {
+        Self::require_admin(&env)?;
+        env.storage()
+            .instance()
+            .set(&DataKey::RegistrationContract, &addr);
         Ok(())
     }
 
@@ -86,6 +137,19 @@ impl ProgressContract {
             .persistent()
             .set(&DataKey::PlayerLevel(player_id), &target_level);
 
+        // Sync to registration contract if set
+        if let Some(reg_contract) = env
+            .storage()
+            .instance()
+            .get::<DataKey, Address>(&DataKey::RegistrationContract)
+        {
+            let reg_client = registration_contract::Client::new(&env, &reg_contract);
+            match reg_client.try_set_player_level(&player_id, &target_level) {
+                Ok(Ok(())) => {}
+                _ => return Err(ProgressError::RegistrationCallFailed),
+            }
+        }
+
         events::player_level_reset(&env, player_id, &old_level, &target_level);
         Ok(())
     }
@@ -134,6 +198,19 @@ impl ProgressContract {
         env.storage()
             .persistent()
             .set(&DataKey::PlayerLevel(player_id), &new_level);
+
+        // Sync to registration contract if set
+        if let Some(reg_contract) = env
+            .storage()
+            .instance()
+            .get::<DataKey, Address>(&DataKey::RegistrationContract)
+        {
+            let reg_client = registration_contract::Client::new(&env, &reg_contract);
+            match reg_client.try_set_player_level(&player_id, &new_level) {
+                Ok(Ok(())) => {}
+                _ => return Err(ProgressError::RegistrationCallFailed),
+            }
+        }
 
         events::progress_updated(
             &env,
