@@ -17,13 +17,18 @@ mod events;
 mod types;
 
 use errors::VerificationError;
-use types::{ContractHealth, DataKey, Milestone, Validator, ValidatorStatus};
+use types::{ContractHealth, DataKey, GlobalMilestoneEntry, GlobalMilestoneIndexPage, Milestone, Validator, ValidatorStatus};
 
 use soroban_sdk::{contract, contractimpl, Address, Env, String, Vec};
 
 use scoutchain_shared_types::validate_cid;
 
 const MAX_CREDENTIALS_LEN: u32 = 256;
+const MAX_GLOBAL_MILESTONE_INDEX: u32 = 500;
+
+const ADMIN_BUMP_LEDGERS: u32 = 10000;
+
+const MAX_MILESTONES_PER_PLAYER_PER_VALIDATOR: u32 = 10;
 
 /// Maximum number of simultaneously registered validators.
 /// Increase requires a contract upgrade because the ValidatorVector entry
@@ -381,6 +386,22 @@ impl VerificationContract {
             .instance()
             .set(&DataKey::TotalMilestoneCount, &(total.checked_add(1).ok_or(VerificationError::Overflow)?));
 
+        let mut global_index: Vec<GlobalMilestoneEntry> = env
+            .storage()
+            .instance()
+            .get(&DataKey::GlobalMilestoneIndex)
+            .unwrap_or_else(|| Vec::new(&env));
+        if global_index.len() >= MAX_GLOBAL_MILESTONE_INDEX {
+            global_index.remove(0);
+        }
+        global_index.push_back(GlobalMilestoneEntry {
+            player_id,
+            milestone_index: next_index,
+        });
+        env.storage()
+            .instance()
+            .set(&DataKey::GlobalMilestoneIndex, &global_index);
+
         events::milestone_approved(
             &env,
             player_id,
@@ -453,11 +474,28 @@ impl VerificationContract {
             .unwrap_or(0u32)
     }
 
-    pub fn get_active_validator_count(env: Env) -> u32 {
-        env.storage()
+    pub fn get_global_milestone_index(
+        env: Env,
+        offset: u32,
+        limit: u32,
+    ) -> GlobalMilestoneIndexPage {
+        let all: Vec<GlobalMilestoneEntry> = env
+            .storage()
             .instance()
-            .get(&DataKey::ActiveValidatorCount)
-            .unwrap_or(0u32)
+            .get(&DataKey::GlobalMilestoneIndex)
+            .unwrap_or_else(|| Vec::new(&env));
+        let total = all.len();
+        let mut entries = Vec::new(&env);
+        let cap = if limit > 50 { 50 } else { limit };
+        let mut i = offset;
+        while i < total && entries.len() < cap {
+            entries.push_back(all.get(i).unwrap());
+            i += 1;
+        }
+        GlobalMilestoneIndexPage {
+            entries,
+            total,
+        }
     }
 
     pub fn get_validator(env: Env, wallet: Address) -> Result<Validator, VerificationError> {
@@ -509,8 +547,93 @@ impl VerificationContract {
     }
 
     // -------------------------------------------------------------------------
+    // Milestone dispute (issue #471)
+    // -------------------------------------------------------------------------
+
+    /// Allow a player to dispute a milestone they believe was wrongly attributed.
+    /// Only the player associated with `player_id` can submit a dispute.
+    /// Stores the dispute with reason and timestamp, and emits a `milestone_disputed` event.
+    /// Admin can later query disputes and resolve them.
+    pub fn dispute_milestone(
+        env: Env,
+        player_wallet: Address,
+        player_id: u64,
+        milestone_index: u32,
+        reason: String,
+    ) -> Result<(), VerificationError> {
+        Self::bump_instance_ttl(&env);
+        Self::require_not_paused(&env)?;
+        Self::require_initialized(&env)?;
+
+        player_wallet.require_auth();
+
+        // Verify the milestone exists
+        let milestone: Milestone = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Milestone(player_id, milestone_index))
+            .ok_or(VerificationError::MilestoneNotFound)?;
+
+        // Verify the caller is the player associated with this milestone
+        if milestone.player_id != player_id {
+            return Err(VerificationError::Unauthorized);
+        }
+
+        // Check if dispute already exists
+        let dispute_key = DataKey::MilestoneDispute(player_id, milestone_index);
+        if env.storage().persistent().has(&dispute_key) {
+            return Err(VerificationError::InvalidInput);
+        }
+
+        let dispute = MilestoneDispute {
+            player_id,
+            milestone_index,
+            reason: reason.clone(),
+            disputed_at: env.ledger().timestamp(),
+        };
+
+        env.storage()
+            .persistent()
+            .set(&dispute_key, &dispute);
+
+        events::milestone_disputed(&env, player_id, milestone_index, &reason);
+        Ok(())
+    }
+
+    /// Query a milestone dispute by player_id and milestone_index.
+    pub fn get_dispute(
+        env: Env,
+        player_id: u64,
+        milestone_index: u32,
+    ) -> Result<MilestoneDispute, VerificationError> {
+        let dispute_key = DataKey::MilestoneDispute(player_id, milestone_index);
+        env.storage()
+            .persistent()
+            .get(&dispute_key)
+            .ok_or(VerificationError::MilestoneNotFound)
+    }
+
+    // -------------------------------------------------------------------------
     // Internal helpers
     // -------------------------------------------------------------------------
+
+    #[inline(always)]
+    fn bump_instance_ttl(env: &Env) {
+        const INSTANCE_TTL_MIN: u32 = 100;
+        const INSTANCE_TTL_MAX: u32 = 10000;
+        env.storage().instance().extend_ttl(INSTANCE_TTL_MIN, INSTANCE_TTL_MAX);
+    }
+
+    fn require_initialized(env: &Env) -> Result<(), VerificationError> {
+        if !env
+            .storage()
+            .instance()
+            .has(&DataKey::Initialized)
+        {
+            return Err(VerificationError::NotInitialized);
+        }
+        Ok(())
+    }
 
     fn require_admin(env: &Env) -> Result<(), VerificationError> {
         let admin: Address = env

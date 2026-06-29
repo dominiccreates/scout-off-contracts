@@ -44,6 +44,9 @@ const INSTANCE_TTL_MAX: u32 = 500;
 const PERSISTENT_TTL_MIN: u32 = 200;
 const PERSISTENT_TTL_MAX: u32 = 2_000;
 
+// Admin key TTL — kept equal to PERSISTENT_TTL_MAX for simplicity.
+const ADMIN_BUMP_LEDGERS: u32 = 2_000;
+
 // Trial offer TTL: ~30 days at 5 s/ledger.
 const TRIAL_TTL_THRESHOLD: u32 = 259_200;
 const TRIAL_TTL_EXTEND_TO: u32 = 518_400;
@@ -113,20 +116,15 @@ impl ScoutAccessContract {
     pub fn withdraw_fees(env: Env, to: Address) -> Result<i128, ScoutAccessError> {
         Self::bump_instance_ttl(&env);
         Self::require_admin(&env)?;
-        let fees: i128 = env
-            .storage()
-            .instance()
-            .get(&DataKey::AccumulatedFees)
-            .unwrap_or(0i128);
+        let key = DataKey::AccumulatedFees;
+        let fees: i128 = env.storage().instance().get(&key).unwrap_or(0i128);
         if fees == 0 {
             return Err(ScoutAccessError::NoFeesToWithdraw);
         }
         let xlm = Self::get_token(&env)?;
         let contract_addr = env.current_contract_address();
         token::Client::new(&env, &xlm).transfer(&contract_addr, &to, &fees);
-        env.storage()
-            .instance()
-            .set(&DataKey::AccumulatedFees, &0i128);
+        env.storage().instance().set(&key, &0i128);
         events::fees_withdrawn(&env, &to, fees);
         Ok(fees)
     }
@@ -295,6 +293,87 @@ impl ScoutAccessContract {
     // Pay-to-contact
     // -------------------------------------------------------------------------
 
+    /// Helper: check Pro tier contact quota. Returns Ok(()) if within limit or not Pro tier.
+    fn check_pro_contact_quota(env: &Env, scout: &Address) -> Result<(), ScoutAccessError> {
+        let sub: Subscription = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Subscription(scout.clone()))
+            .ok_or(ScoutAccessError::ScoutNotSubscribed)?;
+
+        // Only Pro tier has a quota
+        if sub.tier != SubscriptionTier::Pro {
+            return Ok(());
+        }
+
+        // Month bucket: use Unix timestamp / seconds per month (30 days)
+        const SECONDS_PER_MONTH: u64 = 2_592_000;
+        let month_bucket = sub.subscribed_at / SECONDS_PER_MONTH;
+
+        let quota_key = DataKey::ContactCount(scout.clone(), month_bucket);
+        let current: u32 = env.storage().persistent().get(&quota_key).unwrap_or(0u32);
+
+        let config = Self::fee_config(&env);
+        let limit = config.pro_contact_limit;
+
+        if current >= limit {
+            return Err(ScoutAccessError::ContactQuotaExceeded);
+        }
+
+        Ok(())
+    }
+
+    /// Helper: check Pro tier contact quota with a specific count (batch support).
+    fn check_pro_contact_quota_with_count(
+        env: &Env,
+        scout: &Address,
+        requested: u32,
+    ) -> Result<(), ScoutAccessError> {
+        let sub: Subscription = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Subscription(scout.clone()))
+            .ok_or(ScoutAccessError::ScoutNotSubscribed)?;
+
+        // Only Pro tier has a quota
+        if sub.tier != SubscriptionTier::Pro {
+            return Ok(());
+        }
+
+        const SECONDS_PER_MONTH: u64 = 2_592_000;
+        let month_bucket = sub.subscribed_at / SECONDS_PER_MONTH;
+
+        let quota_key = DataKey::ContactCount(scout.clone(), month_bucket);
+        let current: u32 = env.storage().persistent().get(&quota_key).unwrap_or(0u32);
+
+        let config = Self::fee_config(&env);
+        let limit = config.pro_contact_limit;
+
+        if current.saturating_add(requested) > limit {
+            return Err(ScoutAccessError::ContactQuotaExceeded);
+        }
+
+        Ok(())
+    }
+
+    /// Helper: increment contact count for Pro tier scouts.
+    fn increment_contact_count(env: &Env, scout: &Address) {
+        Self::increment_contact_count_by(env, scout, 1)
+    }
+
+    /// Helper: increment contact count by N for Pro tier scouts (batch support).
+    fn increment_contact_count_by(env: &Env, scout: &Address, count: u32) {
+        const SECONDS_PER_MONTH: u64 = 2_592_000;
+        let now = env.ledger().timestamp();
+        let month_bucket = now / SECONDS_PER_MONTH;
+
+        let quota_key = DataKey::ContactCount(scout.clone(), month_bucket);
+        let current: u32 = env.storage().persistent().get(&quota_key).unwrap_or(0u32);
+        env.storage()
+            .persistent()
+            .set(&quota_key, &(current.saturating_add(count)));
+    }
+
     /// Pay a micro-fee to unlock a player's contact details.
     ///
     /// Payment flow:
@@ -303,6 +382,7 @@ impl ScoutAccessContract {
     /// 3. Write contact record to persistent storage (prevents duplicate contacts).
     ///
     /// Scout must have an active, non-expired subscription.
+    /// Pro tier scouts are limited to `pro_contact_limit` contacts per month.
     pub fn pay_to_contact(
         env: Env,
         scout: Address,
@@ -313,6 +393,7 @@ impl ScoutAccessContract {
         Self::require_initialized(&env)?;
         scout.require_auth();
         Self::require_active_subscription(&env, &scout)?;
+        Self::check_pro_contact_quota(&env, &scout)?;
 
         let contact_key = DataKey::ContactRecord(player_id, scout.clone());
         if env.storage().persistent().has(&contact_key) {
@@ -321,6 +402,7 @@ impl ScoutAccessContract {
 
         let config = Self::fee_config(&env);
         Self::collect_fee(&env, &scout, config.contact_fee_stroops)?;
+        Self::increment_contact_count(&env, &scout);
 
         env.storage().persistent().set(&contact_key, &true);
         env.storage()
@@ -358,6 +440,7 @@ impl ScoutAccessContract {
     /// that were recorded.
     ///
     /// Scout must have an active (non-expired) subscription.
+    /// Pro tier scouts are limited to `pro_contact_limit` contacts per month.
     pub fn batch_contact_players(
         env: Env,
         scout: Address,
@@ -390,6 +473,9 @@ impl ScoutAccessContract {
             return Ok(0);
         }
 
+        // Check quota with the count we're about to add
+        Self::check_pro_contact_quota_with_count(&env, &scout, new_contacts)?;
+
         // Single token transfer for all new contacts combined.
         let total_fee = config
             .contact_fee_stroops
@@ -412,6 +498,8 @@ impl ScoutAccessContract {
             );
             events::player_contacted(&env, player_id, &scout, config.contact_fee_stroops);
         }
+
+        Self::increment_contact_count_by(&env, &scout, new_contacts);
 
         env.storage().persistent().extend_ttl(
             &DataKey::Subscription(scout.clone()),
@@ -1933,5 +2021,68 @@ assert_eq!(
             &String::from_str(&env, "QmPK1s3pNYLi9ERiq3BDxKa4XosgWwFRQUydHUtz4YgpqB"),
         );
         assert!(result.is_ok());
+    }
+
+    // -------------------------------------------------------------------------
+    // #424: Pause contract blocks log_trial_offer
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn test_log_trial_offer_when_contract_paused_returns_contract_paused() {
+        let (env, admin, xlm, _contract_id, client) = setup();
+        let scout = Address::generate(&env);
+        let player_id = 1u64;
+        mint_token(&env, &xlm, &admin, &scout, 100_000_000);
+
+        // Subscribe scout to Elite tier
+        client.subscribe(&scout, &SubscriptionTier::Elite);
+
+        // Pause the contract
+        client.pause_contract();
+
+        // Attempt to log trial offer while paused — should be rejected
+        let result = client.try_log_trial_offer(
+            &scout,
+            &player_id,
+            &String::from_str(&env, "QmPK1s3pNYLi9ERiq3BDxKa4XosgWwFRQUydHUtz4YgpqB"),
+        );
+        assert_eq!(result, Err(Ok(ScoutAccessError::ContractPaused)));
+
+        // Verify no trial offer record was written
+        assert_eq!(client.get_trial_count(&player_id), 0);
+    }
+
+    #[test]
+    fn test_log_trial_offer_succeeds_after_unpause() {
+        let (env, admin, xlm, _contract_id, client) = setup();
+        let scout = Address::generate(&env);
+        let player_id = 1u64;
+        mint_token(&env, &xlm, &admin, &scout, 100_000_000);
+
+        // Subscribe scout to Elite tier
+        client.subscribe(&scout, &SubscriptionTier::Elite);
+
+        // Pause the contract
+        client.pause_contract();
+
+        // Attempt to log trial offer while paused — should fail
+        let paused_result = client.try_log_trial_offer(
+            &scout,
+            &player_id,
+            &String::from_str(&env, "QmPK1s3pNYLi9ERiq3BDxKa4XosgWwFRQUydHUtz4YgpqB"),
+        );
+        assert_eq!(paused_result, Err(Ok(ScoutAccessError::ContractPaused)));
+
+        // Unpause the contract
+        client.unpause_contract();
+
+        // Same call should now succeed
+        let result = client.try_log_trial_offer(
+            &scout,
+            &player_id,
+            &String::from_str(&env, "QmPK1s3pNYLi9ERiq3BDxKa4XosgWwFRQUydHUtz4YgpqB"),
+        );
+        assert!(result.is_ok());
+        assert_eq!(client.get_trial_count(&player_id), 1);
     }
 }

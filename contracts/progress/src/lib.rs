@@ -82,21 +82,6 @@ impl ProgressContract {
         Ok(())
     }
 
-    /// Register the verification contract address so advance_level can
-    /// authenticate callers (admin only). Must be called before any
-    /// advance_level call — without it, advance_level returns NotInitialized.
-    pub fn set_verification_contract(
-        env: Env,
-        addr: Address,
-    ) -> Result<(), ProgressError> {
-        Self::bump_instance_ttl(&env);
-        Self::require_admin(&env)?;
-        env.storage()
-            .instance()
-            .set(&DataKey::VerificationContract, &addr);
-        Ok(())
-    }
-
     /// Optionally whitelist the scout_access contract as a secondary caller of
     /// advance_level (for trial-offer Level-3 advances). Admin only.
     pub fn set_scout_access_contract(
@@ -376,6 +361,38 @@ impl ProgressContract {
             }
         }
         entries
+    }
+
+    /// Query history entries for a player since a given Unix timestamp.
+    /// Returns all entries where `updated_at >= since_timestamp`.
+    /// Uses the HistoryVec for O(1) lookup, filters in-memory.
+    pub fn get_history_since(
+        env: Env,
+        player_id: u64,
+        since_timestamp: u64,
+    ) -> Vec<ProgressEntry> {
+        let vec_key = DataKey::HistoryVec(player_id);
+        let history: Vec<ProgressEntry> = env
+            .storage()
+            .persistent()
+            .get(&vec_key)
+            .unwrap_or_else(|| Vec::new(&env));
+
+        if !history.is_empty() {
+            env.storage()
+                .persistent()
+                .extend_ttl(&vec_key, PERSISTENT_TTL_MIN, PERSISTENT_TTL_MAX);
+        }
+
+        let mut result: Vec<ProgressEntry> = Vec::new(&env);
+        for i in 0..history.len() {
+            if let Some(entry) = history.get(i) {
+                if entry.updated_at >= since_timestamp {
+                    result.push_back(entry);
+                }
+            }
+        }
+        result
     }
 
     pub fn health(env: Env) -> ContractHealth {
@@ -863,6 +880,39 @@ mod tests {
         // Clear mocks — old admin auth no longer stored, so pause must fail
         env.mock_auths(&[]);
         client.pause_contract();
+    }
+
+    #[test]
+    fn test_upgrade_preserves_admin() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let id = env.register_contract(None, ProgressContract);
+        let client = ProgressContractClient::new(&env, &id);
+
+        let admin = Address::generate(&env);
+        client.initialize(&admin);
+
+        // Register a player so we confirm persistent data also survives
+        let verification = Address::generate(&env);
+        client.set_verification_contract(&verification);
+
+        let player_id = 1u64;
+        client.advance_level(&verification, &player_id, &1u32);
+
+        // Simulate upgrade: in testutils mode the host accepts empty bytes
+        let new_wasm_hash = env.deployer().upload_contract_wasm(soroban_sdk::Bytes::new(&env));
+
+        client.upgrade(&new_wasm_hash);
+
+        // Admin persisted — admin-gated call still works
+        client.pause_contract();
+
+        // Existing data persisted
+        assert_eq!(
+            client.get_level(&player_id),
+            ProgressLevel::VerifiedIdentity
+        );
     }
 
     #[test]
