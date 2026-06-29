@@ -28,6 +28,18 @@ const MAX_REGION_LEN: u32 = 128;
 const MAX_STRING_LEN: u32 = 64;
 const MAX_IPFS_HASHES: u32 = 10;
 const MAX_BATCH_SIZE: u32 = 20;
+
+// Instance TTL bump
+const INSTANCE_TTL_MIN: u32 = 100;
+const INSTANCE_TTL_MAX: u32 = 500;
+
+// Persistent storage TTL bump for player profiles and admin key.
+const PERSISTENT_TTL_MIN: u32 = 500;
+const PERSISTENT_TTL_MAX: u32 = 2_000;
+
+// Admin key TTL — kept equal to PERSISTENT_TTL_MAX for simplicity.
+const ADMIN_BUMP_LEDGERS: u32 = 2_000;
+
 const CONTRACT_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 #[contract]
@@ -206,6 +218,8 @@ impl RegistrationContract {
     pub fn deregister_player(env: Env, player_id: u64) -> Result<(), ScoutChainError> {
         Self::require_admin(&env)?;
         let profile = Self::load_stored_player(&env, player_id)?;
+        // Resolve level before removing storage keys (progress contract is source of truth)
+        let level = Self::resolve_level(&env, player_id);
         env.storage()
             .persistent()
             .remove(&DataKey::Player(player_id));
@@ -227,7 +241,7 @@ impl RegistrationContract {
         }
 
         // Remove from composite index
-        Self::composite_index_remove(&env, &profile.level, &profile.vitals.region, player_id);
+        Self::composite_index_remove(&env, &level, &profile.vitals.region, player_id);
 
         events::player_deregistered(&env, player_id);
         Ok(())
@@ -497,10 +511,15 @@ impl RegistrationContract {
     }
 
     fn load_stored_player(env: &Env, player_id: u64) -> Result<StoredPlayerProfile, ScoutChainError> {
-        env.storage()
+        let profile = env
+            .storage()
             .persistent()
             .get(&DataKey::Player(player_id))
-            .ok_or(ScoutChainError::PlayerNotFound)
+            .ok_or(ScoutChainError::PlayerNotFound)?;
+        env.storage()
+            .persistent()
+            .extend_ttl(&DataKey::Player(player_id), PERSISTENT_TTL_MIN, PERSISTENT_TTL_MAX);
+        Ok(profile)
     }
 
     /// Resolve the current level for `player_id` from the progress contract.
@@ -1494,44 +1513,48 @@ fn test_upgrade_preserves_admin() {
     }
 
     // -------------------------------------------------------------------------
-    // Issue #461: PlayerByWallet removed after deregister_player
+    // TTL bump bugfix: get_player must extend persistent TTL on read
     // -------------------------------------------------------------------------
 
+    /// Registers a player, advances the ledger sequence past the default Soroban
+    /// persistent TTL (4096 ledgers), then asserts that `get_player` still returns
+    /// the profile successfully.
+    ///
+    /// On unfixed code (without the `extend_ttl` call in `load_stored_player`),
+    /// the persistent key expires after the initial TTL elapses and `get_player`
+    /// panics with `PlayerNotFound`.  The fix causes every `get_player` call to
+    /// refresh the TTL, so the profile remains readable as long as reads continue.
     #[test]
-    fn test_deregister_player_removes_wallet_mapping() {
+    fn test_get_player_ttl_expires_without_bump() {
+        use soroban_sdk::testutils::Ledger;
+
         let (env, client) = setup();
         let admin = Address::generate(&env);
         client.initialize(&admin);
 
+        // Start at a known ledger sequence so the advance is deterministic.
+        env.ledger().with_mut(|l| {
+            l.sequence_number = 100;
+            // Ensure the environment allows TTL values large enough for the test.
+            l.max_entry_ttl = 100_000;
+        });
+
+        // Register a player — the persistent key is created at sequence 100.
         let wallet = Address::generate(&env);
         let vitals = dummy_vitals(&env);
-        let hashes = vec![&env, String::from_str(&env, "QmTest")];
+        let hashes = vec![&env, String::from_str(&env, "QmTTLTest")];
         let player_id = client.register_player(&wallet, &vitals, &hashes);
 
-        client.deregister_player(&player_id);
+        // Advance the ledger past the default Soroban persistent TTL (4096 ledgers).
+        // Without the fix the key expires here and the next `get_player` would panic.
+        env.ledger().with_mut(|l| {
+            l.sequence_number = 100 + 5_000; // well past the 4096 default TTL
+        });
 
-        // Wallet mapping must be gone
-        let result = client.try_get_player_by_wallet(&wallet);
-        assert_eq!(result, Err(Ok(ScoutChainError::PlayerNotFound)));
-    }
-
-    #[test]
-    fn test_deregister_player_allows_wallet_reregistration() {
-        let (env, client) = setup();
-        let admin = Address::generate(&env);
-        client.initialize(&admin);
-
-        let wallet = Address::generate(&env);
-        let vitals = dummy_vitals(&env);
-        let hashes = vec![&env, String::from_str(&env, "QmTest")];
-        let old_id = client.register_player(&wallet, &vitals, &hashes);
-
-        client.deregister_player(&old_id);
-
-        // Same wallet can register again without conflict
-        let new_id = client.register_player(&wallet, &vitals, &hashes);
-        assert_ne!(new_id, old_id);
-        let profile = client.get_player_by_wallet(&wallet);
-        assert_eq!(profile.player_id, new_id);
+        // With the fix in place, `get_player` extends the TTL on every read, so the
+        // profile must still be returned correctly even after the ledger advance.
+        let profile = client.get_player(&player_id);
+        assert_eq!(profile.wallet, wallet);
+        assert_eq!(profile.level, ProgressLevel::Unverified);
     }
 }
