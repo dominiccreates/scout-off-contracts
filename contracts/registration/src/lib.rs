@@ -93,9 +93,11 @@ impl RegistrationContract {
         let old_level = profile.level.clone();
         let region = profile.vitals.region.clone();
 
-        // Update composite index: remove from old bucket, add to new bucket
+        // Update composite and per-level indexes: remove from old bucket, add to new
         Self::composite_index_remove(&env, &old_level, &region, player_id);
         Self::composite_index_add(&env, &level, &region, player_id);
+        Self::level_index_remove(&env, &old_level, player_id);
+        Self::level_index_add(&env, &level, player_id);
 
         profile.level = level;
         profile.updated_at = env.ledger().timestamp();
@@ -176,6 +178,7 @@ impl RegistrationContract {
 
         // Add to composite (level, region) index — starts at Unverified
         Self::composite_index_add(&env, &ProgressLevel::Unverified, &profile.vitals.region, player_id);
+        Self::level_index_add(&env, &ProgressLevel::Unverified, player_id);
 
         events::player_registered(&env, player_id, &wallet);
         Ok(player_id)
@@ -226,8 +229,10 @@ impl RegistrationContract {
                 .set(&DataKey::PlayerIndex, &player_ids);
         }
 
-        // Remove from composite index
-        Self::composite_index_remove(&env, &profile.level, &profile.vitals.region, player_id);
+        // Remove from composite and per-level indexes
+        let level = Self::resolve_level(&env, player_id);
+        Self::composite_index_remove(&env, &level, &profile.vitals.region, player_id);
+        Self::level_index_remove(&env, &level, player_id);
 
         events::player_deregistered(&env, player_id);
         Ok(())
@@ -614,6 +619,30 @@ impl RegistrationContract {
     /// Remove `player_id` from the composite (level, region) index bucket.
     fn composite_index_remove(env: &Env, level: &ProgressLevel, region: &String, player_id: u64) {
         let key = DataKey::PlayersByLevelRegion(level.clone(), region.clone());
+        let mut ids: Vec<u64> = env
+            .storage()
+            .persistent()
+            .get(&key)
+            .unwrap_or_else(|| Vec::new(env));
+        if let Some(pos) = ids.iter().position(|id| id == player_id) {
+            ids.remove(pos as u32);
+            env.storage().persistent().set(&key, &ids);
+        }
+    }
+
+    fn level_index_add(env: &Env, level: &ProgressLevel, player_id: u64) {
+        let key = DataKey::PlayersByLevel(level.clone());
+        let mut ids: Vec<u64> = env
+            .storage()
+            .persistent()
+            .get(&key)
+            .unwrap_or_else(|| Vec::new(env));
+        ids.push_back(player_id);
+        env.storage().persistent().set(&key, &ids);
+    }
+
+    fn level_index_remove(env: &Env, level: &ProgressLevel, player_id: u64) {
+        let key = DataKey::PlayersByLevel(level.clone());
         let mut ids: Vec<u64> = env
             .storage()
             .persistent()
