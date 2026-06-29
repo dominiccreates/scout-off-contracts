@@ -9,6 +9,7 @@ Cargo.lock
 
 # Optimized WASM outputs
 *.optimized.wasm
+*.wasm
 
 # OS
 .DS_Store
