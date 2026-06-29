@@ -788,7 +788,7 @@ mod tests {
                     contract_id,
                     soroban_sdk::vec![
                         &env,
-                        Symbol::new(&env, "progress_updated").into_val(&env),
+                        Symbol::new(&env, crate::events::PROGRESS_UPDATED).into_val(&env),
                         validator.into_val(&env),
                     ],
                     (
@@ -899,7 +899,7 @@ mod tests {
                 &env,
                 (
                     client.address.clone(),
-                    (Symbol::new(&env, "player_level_reset"),).into_val(&env),
+                    (Symbol::new(&env, crate::events::PLAYER_LEVEL_RESET),).into_val(&env),
                     (
                         player_id,
                         ProgressLevel::PerformanceMilestones,

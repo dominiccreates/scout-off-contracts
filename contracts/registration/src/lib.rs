@@ -1267,7 +1267,7 @@ fn test_upgrade_preserves_admin() {
             use soroban_sdk::IntoVal;
             let expected_topics: soroban_sdk::Vec<soroban_sdk::Val> = soroban_sdk::vec![
                 &env,
-                soroban_sdk::Symbol::new(&env, "scout_verified").into_val(&env),
+                soroban_sdk::Symbol::new(&env, crate::events::SCOUT_VERIFIED).into_val(&env),
                 wallet.clone().into_val(&env),
             ];
             let expected_data: soroban_sdk::Val = scout_id.into_val(&env);

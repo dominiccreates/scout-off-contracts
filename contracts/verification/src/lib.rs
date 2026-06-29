@@ -13,7 +13,7 @@
 // Without this step, milestones are recorded but player levels will NOT advance.
 #![cfg_attr(target_family = "wasm", no_std)]
 mod errors;
-mod events;
+pub mod events;
 mod types;
 
 use errors::VerificationError;
@@ -183,7 +183,7 @@ impl VerificationContract {
             .persistent()
             .set(&DataKey::ValidatorVector, &validator_vector);
 
-        events::validator_registered(&env, &wallet);
+        events::validator_registered(&env, &wallet, &credentials);
 
         Ok(())
     }
@@ -815,7 +815,7 @@ mod tests {
                 &env,
                 (
                     client.address.clone(),
-                    (Symbol::new(&env, "contract_paused"),).into_val(&env),
+                    (Symbol::new(&env, crate::events::CONTRACT_PAUSED),).into_val(&env),
                     admin.clone().into_val(&env)
                 )
             ]
@@ -829,7 +829,7 @@ mod tests {
                 &env,
                 (
                     client.address.clone(),
-                    (Symbol::new(&env, "contract_unpaused"),).into_val(&env),
+                    (Symbol::new(&env, crate::events::CONTRACT_UNPAUSED),).into_val(&env),
                     admin.clone().into_val(&env)
                 )
             ]
@@ -876,7 +876,7 @@ mod tests {
                 &env,
                 (
                     client.address.clone(),
-                    (Symbol::new(&env, "progress_contract_updated"),).into_val(&env),
+                    (Symbol::new(&env, crate::events::PROGRESS_CONTRACT_UPDATED),).into_val(&env),
                     addr.into_val(&env)
                 )
             ]
@@ -947,7 +947,7 @@ mod tests {
                 &env,
                 (
                     client.address.clone(),
-                    (Symbol::new(&env, "contract_initialized"),).into_val(&env),
+                    (Symbol::new(&env, crate::events::CONTRACT_INITIALIZED),).into_val(&env),
                     admin.into_val(&env)
                 )
             ]
