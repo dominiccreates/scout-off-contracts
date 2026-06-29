@@ -116,20 +116,15 @@ impl ScoutAccessContract {
     pub fn withdraw_fees(env: Env, to: Address) -> Result<i128, ScoutAccessError> {
         Self::bump_instance_ttl(&env);
         Self::require_admin(&env)?;
-        let fees: i128 = env
-            .storage()
-            .instance()
-            .get(&DataKey::AccumulatedFees)
-            .unwrap_or(0i128);
+        let key = DataKey::AccumulatedFees;
+        let fees: i128 = env.storage().instance().get(&key).unwrap_or(0i128);
         if fees == 0 {
             return Err(ScoutAccessError::NoFeesToWithdraw);
         }
         let xlm = Self::get_token(&env)?;
         let contract_addr = env.current_contract_address();
         token::Client::new(&env, &xlm).transfer(&contract_addr, &to, &fees);
-        env.storage()
-            .instance()
-            .set(&DataKey::AccumulatedFees, &0i128);
+        env.storage().instance().set(&key, &0i128);
         events::fees_withdrawn(&env, &to, fees);
         Ok(fees)
     }
