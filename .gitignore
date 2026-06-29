@@ -18,12 +18,35 @@ Thumbs.db
 .vscode/
 .idea/
 *.swp
+*.swo
+*~
 
 # Kiro IDE
 .kiro/
 
 # Pull-request drafts
 pr-*.md
+
+# Test snapshots
+**/__snapshots__/
+*.snap
+
+# Node / frontend tooling (if any tooling is run locally)
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# Coverage reports
+coverage/
+lcov.info
+tarpaulin-report.html
+
+# Temporary and log files
+*.log
+*.tmp
+*.bak
 
 # Bindings — generated src/ and compiled dist/ are not committed.
 # Only package.json and tsconfig.json scaffolds are tracked.
