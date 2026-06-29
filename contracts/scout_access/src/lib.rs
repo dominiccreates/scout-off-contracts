@@ -6,7 +6,7 @@ use errors::ScoutAccessError;
 use types::{DataKey, Subscription, TrialOffer};
 pub use types::{FeeConfig, SubscriptionTier};
 
-use soroban_sdk::{contract, contractimpl, token, Address, Env, String};
+use soroban_sdk::{contract, contractimpl, token, Address, Env, String, Vec};
 
 use scoutchain_shared_types::{validate_cid, ContractHealth};
 
@@ -267,6 +267,15 @@ impl ScoutAccessContract {
             subscribed_at: now,
         };
 
+        // Remove scout from old tier index if upgrading
+        if let Some(existing) = env
+            .storage()
+            .persistent()
+            .get::<DataKey, Subscription>(&DataKey::Subscription(scout.clone()))
+        {
+            Self::remove_from_tier_index(&env, &scout, &existing.tier);
+        }
+
         env.storage()
             .persistent()
             .set(&DataKey::Subscription(scout.clone()), &sub);
@@ -275,6 +284,8 @@ impl ScoutAccessContract {
             PERSISTENT_TTL_MIN,
             PERSISTENT_TTL_MAX,
         );
+
+        Self::add_to_tier_index(&env, &scout, &tier);
 
         events::scout_subscribed(&env, &scout, &tier, fee);
         Ok(())
@@ -579,6 +590,22 @@ impl ScoutAccessContract {
         list
     }
 
+    pub fn get_tier_subscribers(env: Env, tier: SubscriptionTier) -> Vec<Address> {
+        Self::bump_instance_ttl(&env);
+        let key = DataKey::TierSubscribers(tier);
+        let list: Vec<Address> = env
+            .storage()
+            .persistent()
+            .get(&key)
+            .unwrap_or_else(|| Vec::new(&env));
+        if !list.is_empty() {
+            env.storage()
+                .persistent()
+                .extend_ttl(&key, PERSISTENT_TTL_MIN, PERSISTENT_TTL_MAX);
+        }
+        list
+    }
+
     pub fn get_trial_offer(
         env: Env,
         player_id: u64,
@@ -688,6 +715,40 @@ impl ScoutAccessContract {
     // -------------------------------------------------------------------------
     // Internal helpers
     // -------------------------------------------------------------------------
+
+    fn add_to_tier_index(env: &Env, scout: &Address, tier: &SubscriptionTier) {
+        let key = DataKey::TierSubscribers(tier.clone());
+        let mut subscribers: Vec<Address> = env
+            .storage()
+            .persistent()
+            .get(&key)
+            .unwrap_or_else(|| Vec::new(env));
+        if !subscribers.contains(scout) {
+            subscribers.push_back(scout.clone());
+        }
+        env.storage().persistent().set(&key, &subscribers);
+        env.storage()
+            .persistent()
+            .extend_ttl(&key, PERSISTENT_TTL_MIN, PERSISTENT_TTL_MAX);
+    }
+
+    fn remove_from_tier_index(env: &Env, scout: &Address, tier: &SubscriptionTier) {
+        let key = DataKey::TierSubscribers(tier.clone());
+        if let Some(subscribers) = env
+            .storage()
+            .persistent()
+            .get::<DataKey, Vec<Address>>(&key)
+        {
+            let mut new_list: Vec<Address> = Vec::new(env);
+            for i in 0..subscribers.len() {
+                let addr = subscribers.get(i).unwrap();
+                if &addr != scout {
+                    new_list.push_back(addr);
+                }
+            }
+            env.storage().persistent().set(&key, &new_list);
+        }
+    }
 
     fn require_admin(env: &Env) -> Result<(), ScoutAccessError> {
     let admin: Address = env
