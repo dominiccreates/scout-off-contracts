@@ -817,6 +817,61 @@ mod tests {
         assert_eq!(id, 1);
     }
 
+    // -------------------------------------------------------------------------
+    // Issue #416: explicit boundary tests for position MAX_STRING_LEN (64 bytes)
+    // -------------------------------------------------------------------------
+
+    /// A 65-byte position string must be rejected with InvalidInput.
+    /// Uses try_register_player to assert the specific error variant rather than
+    /// relying on a panic.
+    #[test]
+    fn test_register_player_position_65_bytes_returns_invalid_input() {
+        let (env, client) = setup();
+        let admin = Address::generate(&env);
+        client.initialize(&admin);
+
+        let wallet = Address::generate(&env);
+        let position_65 = String::from_str(&env, &"X".repeat(65));
+        let vitals = PlayerVitals {
+            age: 21,
+            position: position_65,
+            region: String::from_str(&env, "West Africa"),
+            nationality: String::from_str(&env, "Ghana"),
+        };
+        let hashes = vec![&env, String::from_str(&env, "QmBoundaryTest1")];
+
+        let result = client.try_register_player(&wallet, &vitals, &hashes);
+        assert_eq!(result, Err(Ok(ScoutChainError::InvalidInput)));
+    }
+
+    /// A position string of exactly 64 bytes (MAX_STRING_LEN) must be accepted.
+    /// Nationality and region are well within their valid ranges.
+    #[test]
+    fn test_register_player_position_exactly_64_bytes_succeeds() {
+        let (env, client) = setup();
+        let admin = Address::generate(&env);
+        client.initialize(&admin);
+
+        let wallet = Address::generate(&env);
+        let position_64 = String::from_str(&env, &"Y".repeat(64));
+        let vitals = PlayerVitals {
+            age: 22,
+            position: position_64.clone(),
+            region: String::from_str(&env, "East Africa"),
+            nationality: String::from_str(&env, "Kenya"),
+        };
+        let hashes = vec![&env, String::from_str(&env, "QmBoundaryTest2")];
+
+        let result = client.try_register_player(&wallet, &vitals, &hashes);
+        assert!(result.is_ok(), "64-byte position should register successfully");
+        let player_id = result.unwrap().unwrap();
+
+        let profile = client.get_player(&player_id);
+        assert_eq!(profile.vitals.position, position_64);
+        assert_eq!(profile.vitals.nationality, String::from_str(&env, "Kenya"));
+        assert_eq!(profile.vitals.region, String::from_str(&env, "East Africa"));
+    }
+
     #[test]
     #[should_panic]
     fn test_register_player_region_too_long() {
