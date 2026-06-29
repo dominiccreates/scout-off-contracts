@@ -5,8 +5,8 @@ mod types;
 
 use errors::ScoutChainError;
 use types::{
-    ContractHealth, DataKey, PlayerProfile, PlayerSummary, PlayerVitals, ProgressLevel,
-    ScoutProfile,
+    ContractHealth, DataKey, FilterResult, PlayerProfile, PlayerSummary, PlayerVitals,
+    ProgressLevel, ScoutProfile,
 };
 
 use soroban_sdk::{contract, contractimpl, Address, Env, String, Vec};
@@ -105,9 +105,11 @@ impl RegistrationContract {
         let old_level = profile.level.clone();
         let region = profile.vitals.region.clone();
 
-        // Update composite index: remove from old bucket, add to new bucket
+        // Update composite and per-level indexes: remove from old bucket, add to new
         Self::composite_index_remove(&env, &old_level, &region, player_id);
         Self::composite_index_add(&env, &level, &region, player_id);
+        Self::level_index_remove(&env, &old_level, player_id);
+        Self::level_index_add(&env, &level, player_id);
 
         profile.level = level;
         profile.updated_at = env.ledger().timestamp();
@@ -188,6 +190,7 @@ impl RegistrationContract {
 
         // Add to composite (level, region) index — starts at Unverified
         Self::composite_index_add(&env, &ProgressLevel::Unverified, &profile.vitals.region, player_id);
+        Self::level_index_add(&env, &ProgressLevel::Unverified, player_id);
 
         events::player_registered(&env, player_id, &wallet);
         Ok(player_id)
@@ -408,21 +411,32 @@ impl RegistrationContract {
     }
 
     /// Filter players by region, position, and minimum progress level.
-    /// Uses the composite `PlayersByLevelRegion` index for level+region lookups,
-    /// so gas cost is proportional to matching results, not total player count.
-    /// Returns at most 50 results to bound gas usage.
+    ///
+    /// - Pass an empty string for `region` to match players in any region.
+    /// - Pass an empty string for `position` to match players in any position.
+    /// - `cursor` = 0 starts from the beginning; pass the returned `next_cursor`
+    ///   to fetch the next page.  `next_cursor` = 0 in the response means no
+    ///   further results.
+    /// - `limit` is capped at 50 internally.
+    ///
+    /// When `region` is non-empty the composite `PlayersByLevelRegion` index is
+    /// used so only matching buckets are loaded.  When `region` is empty the
+    /// function falls back to a full `PlayerIndex` scan filtered by level and
+    /// position.
     pub fn filter_players(
         env: Env,
         region: String,
         position: String,
         min_level: ProgressLevel,
-        cursor: u64,
+        offset: u32,
         limit: u32,
     ) -> Result<FilterResult, ScoutChainError> {
         Self::require_initialized(&env)?;
 
-        // Collect candidate player IDs from composite index buckets.
-        // We query every level bucket >= min_level for this region.
+        let max_results = (limit.min(50)) as usize;
+        let region_filter = region.len() > 0;
+        let position_filter = position.len() > 0;
+
         let levels: [ProgressLevel; 4] = [
             ProgressLevel::Unverified,
             ProgressLevel::VerifiedIdentity,
@@ -430,38 +444,72 @@ impl RegistrationContract {
             ProgressLevel::EliteTier,
         ];
 
-        let mut profiles = Vec::new(&env);
+        let mut results: Vec<PlayerProfile> = Vec::new(&env);
         let mut next_cursor: u64 = 0;
-        let mut past_cursor = cursor == 0; // cursor=0 means start from beginning
+        let mut past_cursor = cursor == 0; // cursor == 0 means start from beginning
 
-        for level in levels.iter() {
-            if !Self::level_gte(level, &min_level) {
-                continue;
+        if region_filter {
+            // Fast path: composite (level, region) index — only load matching buckets.
+            'outer: for level in levels.iter() {
+                if !Self::level_gte(level, &min_level) {
+                    continue;
+                }
+                let ids: Vec<u64> = env
+                    .storage()
+                    .persistent()
+                    .get(&DataKey::PlayersByLevelRegion(level.clone(), region.clone()))
+                    .unwrap_or_else(|| Vec::new(&env));
+
+                for player_id in ids.iter() {
+                    if !past_cursor {
+                        if player_id == cursor {
+                            past_cursor = true;
+                        }
+                        continue;
+                    }
+                    if results.len() >= max_results {
+                        next_cursor = player_id;
+                        break 'outer;
+                    }
+                    if let Ok(profile) = Self::load_player(&env, player_id) {
+                        if !position_filter || profile.vitals.position == position {
+                            results.push_back(profile);
+                        }
+                    }
+                }
             }
-            let ids: Vec<u64> = env
+        } else {
+            // Slow path: full PlayerIndex scan — needed when no region is specified.
+            let all_ids: Vec<u64> = env
                 .storage()
                 .persistent()
-                .get(&DataKey::PlayersByLevelRegion(level.clone(), region.clone()))
+                .get(&DataKey::PlayerIndex)
                 .unwrap_or_else(|| Vec::new(&env));
 
-            for player_id in ids.iter() {
+            for player_id in all_ids.iter() {
+                if !past_cursor {
+                    if player_id == cursor {
+                        past_cursor = true;
+                    }
+                    continue;
+                }
                 if results.len() >= max_results {
+                    next_cursor = player_id;
                     break;
                 }
                 if let Ok(profile) = Self::load_player(&env, player_id) {
-                    if profile.vitals.position == position {
+                    if !Self::level_gte(&profile.level, &min_level) {
+                        continue;
+                    }
+                    if !position_filter || profile.vitals.position == position {
                         results.push_back(profile);
                     }
                 }
             }
-
-            if results.len() >= max_results {
-                break;
-            }
         }
 
         Ok(FilterResult {
-            profiles,
+            profiles: results,
             next_cursor,
         })
     }
@@ -643,6 +691,30 @@ impl RegistrationContract {
             env.storage().persistent().set(&key, &ids);
         }
     }
+
+    fn level_index_add(env: &Env, level: &ProgressLevel, player_id: u64) {
+        let key = DataKey::PlayersByLevel(level.clone());
+        let mut ids: Vec<u64> = env
+            .storage()
+            .persistent()
+            .get(&key)
+            .unwrap_or_else(|| Vec::new(env));
+        ids.push_back(player_id);
+        env.storage().persistent().set(&key, &ids);
+    }
+
+    fn level_index_remove(env: &Env, level: &ProgressLevel, player_id: u64) {
+        let key = DataKey::PlayersByLevel(level.clone());
+        let mut ids: Vec<u64> = env
+            .storage()
+            .persistent()
+            .get(&key)
+            .unwrap_or_else(|| Vec::new(env));
+        if let Some(pos) = ids.iter().position(|id| id == player_id) {
+            ids.remove(pos as u32);
+            env.storage().persistent().set(&key, &ids);
+        }
+    }
 }
 
 // =============================================================================
@@ -772,6 +844,61 @@ mod tests {
         assert_eq!(id, 1);
     }
 
+    // -------------------------------------------------------------------------
+    // Issue #416: explicit boundary tests for position MAX_STRING_LEN (64 bytes)
+    // -------------------------------------------------------------------------
+
+    /// A 65-byte position string must be rejected with InvalidInput.
+    /// Uses try_register_player to assert the specific error variant rather than
+    /// relying on a panic.
+    #[test]
+    fn test_register_player_position_65_bytes_returns_invalid_input() {
+        let (env, client) = setup();
+        let admin = Address::generate(&env);
+        client.initialize(&admin);
+
+        let wallet = Address::generate(&env);
+        let position_65 = String::from_str(&env, &"X".repeat(65));
+        let vitals = PlayerVitals {
+            age: 21,
+            position: position_65,
+            region: String::from_str(&env, "West Africa"),
+            nationality: String::from_str(&env, "Ghana"),
+        };
+        let hashes = vec![&env, String::from_str(&env, "QmBoundaryTest1")];
+
+        let result = client.try_register_player(&wallet, &vitals, &hashes);
+        assert_eq!(result, Err(Ok(ScoutChainError::InvalidInput)));
+    }
+
+    /// A position string of exactly 64 bytes (MAX_STRING_LEN) must be accepted.
+    /// Nationality and region are well within their valid ranges.
+    #[test]
+    fn test_register_player_position_exactly_64_bytes_succeeds() {
+        let (env, client) = setup();
+        let admin = Address::generate(&env);
+        client.initialize(&admin);
+
+        let wallet = Address::generate(&env);
+        let position_64 = String::from_str(&env, &"Y".repeat(64));
+        let vitals = PlayerVitals {
+            age: 22,
+            position: position_64.clone(),
+            region: String::from_str(&env, "East Africa"),
+            nationality: String::from_str(&env, "Kenya"),
+        };
+        let hashes = vec![&env, String::from_str(&env, "QmBoundaryTest2")];
+
+        let result = client.try_register_player(&wallet, &vitals, &hashes);
+        assert!(result.is_ok(), "64-byte position should register successfully");
+        let player_id = result.unwrap().unwrap();
+
+        let profile = client.get_player(&player_id);
+        assert_eq!(profile.vitals.position, position_64);
+        assert_eq!(profile.vitals.nationality, String::from_str(&env, "Kenya"));
+        assert_eq!(profile.vitals.region, String::from_str(&env, "East Africa"));
+    }
+
     #[test]
     #[should_panic]
     fn test_register_player_region_too_long() {
@@ -825,6 +952,64 @@ mod tests {
         let vitals = dummy_vitals(&env);
         let hashes: soroban_sdk::Vec<String> = vec![&env];
         client.register_player(&wallet, &vitals, &hashes);
+    }
+
+    #[test]
+    fn test_register_player_exactly_10_hashes_succeeds() {
+        let (env, client) = setup();
+        let admin = Address::generate(&env);
+        client.initialize(&admin);
+
+        let wallet = Address::generate(&env);
+        let vitals = dummy_vitals(&env);
+        let h = String::from_str(&env, "QmHash");
+        let hashes = vec![
+            &env,
+            h.clone(),
+            h.clone(),
+            h.clone(),
+            h.clone(),
+            h.clone(),
+            h.clone(),
+            h.clone(),
+            h.clone(),
+            h.clone(),
+            h.clone(),
+        ];
+
+        let player_id = client.register_player(&wallet, &vitals, &hashes);
+        assert_eq!(player_id, 1);
+
+        let profile = client.get_player(&player_id);
+        assert_eq!(profile.ipfs_hashes.len(), 10);
+    }
+
+    #[test]
+    fn test_register_player_11_hashes_fails_with_invalid_input() {
+        let (env, client) = setup();
+        let admin = Address::generate(&env);
+        client.initialize(&admin);
+
+        let wallet = Address::generate(&env);
+        let vitals = dummy_vitals(&env);
+        let h = String::from_str(&env, "QmHash");
+        let hashes = vec![
+            &env,
+            h.clone(),
+            h.clone(),
+            h.clone(),
+            h.clone(),
+            h.clone(),
+            h.clone(),
+            h.clone(),
+            h.clone(),
+            h.clone(),
+            h.clone(),
+            h.clone(),
+        ];
+
+        let result = client.try_register_player(&wallet, &vitals, &hashes);
+        assert_eq!(result, Err(Ok(ScoutChainError::InvalidInput)));
     }
 
     #[test]
@@ -1132,12 +1317,12 @@ fn test_upgrade_preserves_admin() {
         };
         client.register_player(&wallet3, &vitals3, &hashes);
 
-        // Filter: Forward in West Africa — page 1
+        // Filter: Forward in West Africa — offset=0
         let result = client.filter_players(
             &String::from_str(&env, "West Africa"),
             &String::from_str(&env, "Forward"),
             &ProgressLevel::Unverified,
-            &0u64,
+            &0u32,
             &20u32,
         );
 
@@ -1186,29 +1371,127 @@ fn test_upgrade_preserves_admin() {
             client.register_player(&wallet, &vitals, &hashes);
         }
 
-        // Page 1: limit=4 → should return 4 Forwards and a next_cursor
+        // Page 1: offset=0, limit=4 → should return 4 Forwards
         let page1 = client.filter_players(
             &String::from_str(&env, "West Africa"),
             &String::from_str(&env, "Forward"),
             &ProgressLevel::Unverified,
-            &0u64,
+            &0u32,
             &4u32,
         );
         assert_eq!(page1.profiles.len(), 4);
         assert_ne!(page1.next_cursor, 0, "expected more pages");
 
-        // Page 2: continue from next_cursor
+        // Page 2: offset=4, limit=4 → remaining Forwards
         let page2 = client.filter_players(
             &String::from_str(&env, "West Africa"),
             &String::from_str(&env, "Forward"),
             &ProgressLevel::Unverified,
-            &page1.next_cursor,
+            &4u32,
             &4u32,
         );
-        // 5 Forwards total, already fetched 4, so 4 more candidates remain
-        // (player 5 + skip midfielder + players 7,8,9) → 4 matches
+        // 8 Forwards total, already skipped 4, so 4 more remain
         assert_eq!(page2.profiles.len(), 4);
         assert_eq!(page2.next_cursor, 0, "should be no more pages");
+    }
+
+    // -------------------------------------------------------------------------
+    // Issue #419: filter_players with region filter only (empty position)
+    // -------------------------------------------------------------------------
+
+    /// Register players across two distinct regions.
+    /// filter_players with only a region set (empty position) must return only
+    /// players from that region and exclude all others.
+    #[test]
+    fn test_filter_players_region_only_returns_correct_players() {
+        let (env, client) = setup();
+        let admin = Address::generate(&env);
+        client.initialize(&admin);
+
+        let hashes = vec![&env, String::from_str(&env, "QmTest")];
+
+        // Region A players (West Africa)
+        let wallet1 = Address::generate(&env);
+        let vitals1 = PlayerVitals {
+            age: 18,
+            position: String::from_str(&env, "Forward"),
+            region: String::from_str(&env, "West Africa"),
+            nationality: String::from_str(&env, "Ghana"),
+        };
+        let id_wa1 = client.register_player(&wallet1, &vitals1, &hashes);
+
+        let wallet2 = Address::generate(&env);
+        let vitals2 = PlayerVitals {
+            age: 20,
+            position: String::from_str(&env, "Midfielder"),
+            region: String::from_str(&env, "West Africa"),
+            nationality: String::from_str(&env, "Nigeria"),
+        };
+        let id_wa2 = client.register_player(&wallet2, &vitals2, &hashes);
+
+        // Region B player (Europe) — must be excluded
+        let wallet3 = Address::generate(&env);
+        let vitals3 = PlayerVitals {
+            age: 22,
+            position: String::from_str(&env, "Defender"),
+            region: String::from_str(&env, "Europe"),
+            nationality: String::from_str(&env, "Germany"),
+        };
+        client.register_player(&wallet3, &vitals3, &hashes);
+
+        // Filter: region = West Africa, no position constraint (empty string)
+        let result = client.filter_players(
+            &String::from_str(&env, "West Africa"), // region filter only
+            &String::from_str(&env, ""),             // no position filter
+            &ProgressLevel::Unverified,
+            &0u64,
+            &20u32,
+        );
+
+        assert_eq!(result.profiles.len(), 2, "two West Africa players expected");
+
+        let returned_ids: soroban_sdk::Vec<u64> = {
+            let mut v = soroban_sdk::Vec::new(&env);
+            for i in 0..result.profiles.len() {
+                v.push_back(result.profiles.get(i).unwrap().player_id);
+            }
+            v
+        };
+        assert!(returned_ids.contains(&id_wa1), "id_wa1 must be in results");
+        assert!(returned_ids.contains(&id_wa2), "id_wa2 must be in results");
+        assert_eq!(result.next_cursor, 0);
+    }
+
+    /// filter_players with a region that has no registered players returns empty.
+    #[test]
+    fn test_filter_players_region_only_empty_region_returns_empty() {
+        let (env, client) = setup();
+        let admin = Address::generate(&env);
+        client.initialize(&admin);
+
+        let hashes = vec![&env, String::from_str(&env, "QmTest")];
+
+        // All players are in West Africa
+        let wallet1 = Address::generate(&env);
+        let vitals1 = PlayerVitals {
+            age: 19,
+            position: String::from_str(&env, "Forward"),
+            region: String::from_str(&env, "West Africa"),
+            nationality: String::from_str(&env, "Senegal"),
+        };
+        client.register_player(&wallet1, &vitals1, &hashes);
+
+        // Filter by a region that has no players
+        let result = client.filter_players(
+            &String::from_str(&env, "East Asia"), // region with no players
+            &String::from_str(&env, ""),           // no position filter
+            &ProgressLevel::Unverified,
+            &0u64,
+            &20u32,
+        );
+
+        assert_eq!(result.profiles.len(), 0, "no players in East Asia — must be empty");
+        assert_eq!(result.next_cursor, 0);
     }
 
     // -------------------------------------------------------------------------

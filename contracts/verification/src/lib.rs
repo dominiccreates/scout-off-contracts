@@ -17,15 +17,14 @@ mod events;
 mod types;
 
 use errors::VerificationError;
-use types::{
-    ContractHealth, DataKey, Milestone, MilestoneDispute, Validator, ValidatorStatus,
-};
+use types::{ContractHealth, DataKey, GlobalMilestoneEntry, GlobalMilestoneIndexPage, Milestone, Validator, ValidatorStatus};
 
 use soroban_sdk::{contract, contractimpl, Address, Env, String, Vec};
 
 use scoutchain_shared_types::validate_cid;
 
 const MAX_CREDENTIALS_LEN: u32 = 256;
+const MAX_GLOBAL_MILESTONE_INDEX: u32 = 500;
 
 const ADMIN_BUMP_LEDGERS: u32 = 10000;
 
@@ -355,6 +354,22 @@ impl VerificationContract {
             .instance()
             .set(&DataKey::TotalMilestoneCount, &(total.checked_add(1).ok_or(VerificationError::Overflow)?));
 
+        let mut global_index: Vec<GlobalMilestoneEntry> = env
+            .storage()
+            .instance()
+            .get(&DataKey::GlobalMilestoneIndex)
+            .unwrap_or_else(|| Vec::new(&env));
+        if global_index.len() >= MAX_GLOBAL_MILESTONE_INDEX {
+            global_index.remove(0);
+        }
+        global_index.push_back(GlobalMilestoneEntry {
+            player_id,
+            milestone_index: next_index,
+        });
+        env.storage()
+            .instance()
+            .set(&DataKey::GlobalMilestoneIndex, &global_index);
+
         events::milestone_approved(
             &env,
             player_id,
@@ -425,6 +440,30 @@ impl VerificationContract {
             .instance()
             .get(&DataKey::TotalMilestoneCount)
             .unwrap_or(0u32)
+    }
+
+    pub fn get_global_milestone_index(
+        env: Env,
+        offset: u32,
+        limit: u32,
+    ) -> GlobalMilestoneIndexPage {
+        let all: Vec<GlobalMilestoneEntry> = env
+            .storage()
+            .instance()
+            .get(&DataKey::GlobalMilestoneIndex)
+            .unwrap_or_else(|| Vec::new(&env));
+        let total = all.len();
+        let mut entries = Vec::new(&env);
+        let cap = if limit > 50 { 50 } else { limit };
+        let mut i = offset;
+        while i < total && entries.len() < cap {
+            entries.push_back(all.get(i).unwrap());
+            i += 1;
+        }
+        GlobalMilestoneIndexPage {
+            entries,
+            total,
+        }
     }
 
     pub fn get_validator(env: Env, wallet: Address) -> Result<Validator, VerificationError> {
