@@ -44,6 +44,9 @@ const INSTANCE_TTL_MAX: u32 = 500;
 const PERSISTENT_TTL_MIN: u32 = 200;
 const PERSISTENT_TTL_MAX: u32 = 2_000;
 
+// Admin key TTL — kept equal to PERSISTENT_TTL_MAX for simplicity.
+const ADMIN_BUMP_LEDGERS: u32 = 2_000;
+
 // Trial offer TTL: ~30 days at 5 s/ledger.
 const TRIAL_TTL_THRESHOLD: u32 = 259_200;
 const TRIAL_TTL_EXTEND_TO: u32 = 518_400;
@@ -1886,5 +1889,68 @@ assert_eq!(
             &String::from_str(&env, "QmPK1s3pNYLi9ERiq3BDxKa4XosgWwFRQUydHUtz4YgpqB"),
         );
         assert!(result.is_ok());
+    }
+
+    // -------------------------------------------------------------------------
+    // #424: Pause contract blocks log_trial_offer
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn test_log_trial_offer_when_contract_paused_returns_contract_paused() {
+        let (env, admin, xlm, _contract_id, client) = setup();
+        let scout = Address::generate(&env);
+        let player_id = 1u64;
+        mint_token(&env, &xlm, &admin, &scout, 100_000_000);
+
+        // Subscribe scout to Elite tier
+        client.subscribe(&scout, &SubscriptionTier::Elite);
+
+        // Pause the contract
+        client.pause_contract();
+
+        // Attempt to log trial offer while paused — should be rejected
+        let result = client.try_log_trial_offer(
+            &scout,
+            &player_id,
+            &String::from_str(&env, "QmPK1s3pNYLi9ERiq3BDxKa4XosgWwFRQUydHUtz4YgpqB"),
+        );
+        assert_eq!(result, Err(Ok(ScoutAccessError::ContractPaused)));
+
+        // Verify no trial offer record was written
+        assert_eq!(client.get_trial_count(&player_id), 0);
+    }
+
+    #[test]
+    fn test_log_trial_offer_succeeds_after_unpause() {
+        let (env, admin, xlm, _contract_id, client) = setup();
+        let scout = Address::generate(&env);
+        let player_id = 1u64;
+        mint_token(&env, &xlm, &admin, &scout, 100_000_000);
+
+        // Subscribe scout to Elite tier
+        client.subscribe(&scout, &SubscriptionTier::Elite);
+
+        // Pause the contract
+        client.pause_contract();
+
+        // Attempt to log trial offer while paused — should fail
+        let paused_result = client.try_log_trial_offer(
+            &scout,
+            &player_id,
+            &String::from_str(&env, "QmPK1s3pNYLi9ERiq3BDxKa4XosgWwFRQUydHUtz4YgpqB"),
+        );
+        assert_eq!(paused_result, Err(Ok(ScoutAccessError::ContractPaused)));
+
+        // Unpause the contract
+        client.unpause_contract();
+
+        // Same call should now succeed
+        let result = client.try_log_trial_offer(
+            &scout,
+            &player_id,
+            &String::from_str(&env, "QmPK1s3pNYLi9ERiq3BDxKa4XosgWwFRQUydHUtz4YgpqB"),
+        );
+        assert!(result.is_ok());
+        assert_eq!(client.get_trial_count(&player_id), 1);
     }
 }
