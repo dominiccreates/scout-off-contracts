@@ -5,8 +5,8 @@ mod types;
 
 use errors::ScoutChainError;
 use types::{
-    ContractHealth, DataKey, PlayerProfile, PlayerSummary, PlayerVitals, ProgressLevel,
-    ScoutProfile,
+    ContractHealth, DataKey, FilterResult, PlayerProfile, PlayerSummary, PlayerVitals,
+    ProgressLevel, ScoutProfile,
 };
 
 use soroban_sdk::{contract, contractimpl, Address, Env, String, Vec};
@@ -398,22 +398,16 @@ impl RegistrationContract {
         }
     }
 
-    /// Filter players by region, position, and minimum progress level.
-    /// Uses the composite `PlayersByLevelRegion` index for level+region lookups,
-    /// so gas cost is proportional to matching results, not total player count.
-    /// Returns at most 50 results to bound gas usage.
     pub fn filter_players(
         env: Env,
         region: String,
         position: String,
         min_level: ProgressLevel,
-        cursor: u64,
+        offset: u32,
         limit: u32,
     ) -> Result<FilterResult, ScoutChainError> {
         Self::require_initialized(&env)?;
 
-        // Collect candidate player IDs from composite index buckets.
-        // We query every level bucket >= min_level for this region.
         let levels: [ProgressLevel; 4] = [
             ProgressLevel::Unverified,
             ProgressLevel::VerifiedIdentity,
@@ -421,11 +415,12 @@ impl RegistrationContract {
             ProgressLevel::EliteTier,
         ];
 
+        let max_results = if limit > 50 { 50 } else { limit };
         let mut profiles = Vec::new(&env);
+        let mut matched: u32 = 0;
         let mut next_cursor: u64 = 0;
-        let mut past_cursor = cursor == 0; // cursor=0 means start from beginning
 
-        for level in levels.iter() {
+        'outer: for level in levels.iter() {
             if !Self::level_gte(level, &min_level) {
                 continue;
             }
@@ -436,18 +431,20 @@ impl RegistrationContract {
                 .unwrap_or_else(|| Vec::new(&env));
 
             for player_id in ids.iter() {
-                if results.len() >= max_results {
-                    break;
-                }
                 if let Ok(profile) = Self::load_player(&env, player_id) {
                     if profile.vitals.position == position {
-                        results.push_back(profile);
+                        if matched < offset {
+                            matched += 1;
+                            continue;
+                        }
+                        if profiles.len() >= max_results {
+                            next_cursor = player_id;
+                            break 'outer;
+                        }
+                        profiles.push_back(profile);
+                        matched += 1;
                     }
                 }
-            }
-
-            if results.len() >= max_results {
-                break;
             }
         }
 
@@ -1142,12 +1139,12 @@ fn test_upgrade_preserves_admin() {
         };
         client.register_player(&wallet3, &vitals3, &hashes);
 
-        // Filter: Forward in West Africa — page 1
+        // Filter: Forward in West Africa — offset=0
         let result = client.filter_players(
             &String::from_str(&env, "West Africa"),
             &String::from_str(&env, "Forward"),
             &ProgressLevel::Unverified,
-            &0u64,
+            &0u32,
             &20u32,
         );
 
@@ -1196,27 +1193,26 @@ fn test_upgrade_preserves_admin() {
             client.register_player(&wallet, &vitals, &hashes);
         }
 
-        // Page 1: limit=4 → should return 4 Forwards and a next_cursor
+        // Page 1: offset=0, limit=4 → should return 4 Forwards
         let page1 = client.filter_players(
             &String::from_str(&env, "West Africa"),
             &String::from_str(&env, "Forward"),
             &ProgressLevel::Unverified,
-            &0u64,
+            &0u32,
             &4u32,
         );
         assert_eq!(page1.profiles.len(), 4);
         assert_ne!(page1.next_cursor, 0, "expected more pages");
 
-        // Page 2: continue from next_cursor
+        // Page 2: offset=4, limit=4 → remaining Forwards
         let page2 = client.filter_players(
             &String::from_str(&env, "West Africa"),
             &String::from_str(&env, "Forward"),
             &ProgressLevel::Unverified,
-            &page1.next_cursor,
+            &4u32,
             &4u32,
         );
-        // 5 Forwards total, already fetched 4, so 4 more candidates remain
-        // (player 5 + skip midfielder + players 7,8,9) → 4 matches
+        // 8 Forwards total, already skipped 4, so 4 more remain
         assert_eq!(page2.profiles.len(), 4);
         assert_eq!(page2.next_cursor, 0, "should be no more pages");
     }
