@@ -71,49 +71,82 @@ psql $DATABASE_URL -f migrations/001_initial_schema.sql
 
 ## Upgrading a Deployed Contract
 
-All four contracts expose an `upgrade(new_wasm_hash)` function (admin auth required). The admin address is stored in **persistent** storage so it survives the WASM swap.
+All four contracts expose an `upgrade(new_wasm_hash)` function (admin auth required). The admin address is stored in **persistent** storage so it survives the WASM swap. Upgrading replaces only the executable WASM — **the contract ID stays the same**, so all existing clients, integrations, and indexed data continue to work without any address change.
 
-Instance storage (Initialized, Paused, counters, fee config) is **not** automatically carried over. You must re-apply it after the upgrade if those values need to be preserved.
+Instance storage (Initialized, Paused, counters, fee config, contract links) is **not** automatically wiped during an upgrade, but values must be re-verified after each WASM swap in case the new code changes the storage layout or if instance TTL has drifted close to expiry.
 
-### Upgrade procedure
+### Scripted upgrade (recommended)
 
-**Step 1 — Read current instance state** (before upgrading)
+`scripts/upgrade.sh` automates the five-step procedure below, including the keypair guard, instance-state snapshot, WASM installation, the `upgrade()` call, health check, and a per-contract post-upgrade checklist.
 
 ```bash
-# Save values you need to restore
-stellar contract invoke --id $CONTRACT_ID -- get_fee_config   # scout_access only
+# Build first
+cargo build --target wasm32v1-none --release
+
+# Then upgrade a single contract
+./scripts/upgrade.sh testnet scout_access \
+  target/wasm32v1-none/release/scoutchain_scout_access.wasm
+
+# Other contract names: registration | verification | progress
 ```
 
-**Step 2 — Build and upload the new WASM**
+The script prints a post-upgrade checklist specific to the contract being upgraded (re-wiring links, restoring fee config, regenerating bindings).
+
+### Manual upgrade procedure
+
+**Step 1 — Snapshot current on-chain state** (before upgrading)
 
 ```bash
-stellar contract build
+# scout_access: save fee config
+stellar contract invoke --id $SCOUT_ACCESS_CONTRACT_ID \
+  --network testnet -- get_fee_config
+
+# All contracts: note current version
+stellar contract invoke --id $CONTRACT_ID --network testnet -- version
+```
+
+**Step 2 — Build and install the new WASM**
+
+```bash
+cargo build --target wasm32v1-none --release
+
 stellar contract install \
   --source $DEPLOYER_SECRET \
   --network testnet \
   --wasm target/wasm32v1-none/release/<contract_name>.wasm
-# Prints the new wasm hash: <NEW_WASM_HASH>
+# Prints the new wasm hash → NEW_WASM_HASH
 ```
 
-**Step 3 — Call `upgrade`** (must be called by the admin address)
+**Step 3 — Call `upgrade`** (must be signed by the admin address)
 
 ```bash
 stellar contract invoke \
   --id $CONTRACT_ID \
-  --source $ADMIN_ADDRESS \
+  --source $DEPLOYER_SECRET \
   --network testnet \
   -- upgrade \
   --new_wasm_hash <NEW_WASM_HASH>
 ```
 
-**Step 4 — Re-apply instance state** (if needed)
+**Step 4 — Verify the contract is healthy**
 
-For `scout_access`, restore fee config:
+```bash
+stellar contract invoke --id $CONTRACT_ID --network testnet -- health
+stellar contract invoke --id $CONTRACT_ID --network testnet -- version
+```
+
+**Step 5 — Re-apply instance state** (if needed)
+
+For `scout_access`, restore fee config and progress contract link:
 
 ```bash
 stellar contract invoke --id $SCOUT_ACCESS_CONTRACT_ID \
   --source $ADMIN_ADDRESS --network testnet \
-  -- update_fee_config --fee_config '...'
+  -- update_fee_config --fee_config '<saved JSON>'
+
+stellar contract invoke --id $SCOUT_ACCESS_CONTRACT_ID \
+  --source $ADMIN_ADDRESS --network testnet \
+  -- set_progress_contract --addr $PROGRESS_CONTRACT_ID
 ```
 
 For `verification`, re-wire the progress contract link:
@@ -125,11 +158,38 @@ stellar contract invoke --id $VERIFICATION_CONTRACT_ID \
   --progress_contract $PROGRESS_CONTRACT_ID
 ```
 
-**Step 5 — Verify**
+For `progress`, re-wire both cross-contract links:
 
 ```bash
-stellar contract invoke --id $CONTRACT_ID -- health
+stellar contract invoke --id $PROGRESS_CONTRACT_ID \
+  --source $ADMIN_ADDRESS --network testnet \
+  -- set_verification_contract --addr $VERIFICATION_CONTRACT_ID
+
+stellar contract invoke --id $PROGRESS_CONTRACT_ID \
+  --source $ADMIN_ADDRESS --network testnet \
+  -- set_registration_contract --addr $REGISTRATION_CONTRACT_ID
 ```
+
+**Step 6 — Regenerate TypeScript bindings** (if the ABI changed)
+
+```bash
+./scripts/generate-bindings.sh testnet
+```
+
+### Address migration (new contract ID)
+
+If a bug cannot be fixed via `upgrade()` (e.g. the storage layout must change in a way that requires a fresh deploy), you must migrate to a new contract address. This is a breaking change — all clients and the off-chain indexer must be updated.
+
+Migration procedure:
+
+1. Deploy the new contract: `./scripts/deploy.sh testnet` (or deploy just the affected contract manually).
+2. Initialize the new contract: `./scripts/initialize.sh testnet`.
+3. Pause the old contract so no new state is written: `stellar contract invoke --id $OLD_ID -- pause_contract`.
+4. Replay any off-chain events against the new contract to seed initial state (use the backend indexer's event log).
+5. Update `.env.contracts` with the new contract ID.
+6. Regenerate TypeScript bindings: `./scripts/generate-bindings.sh testnet`.
+7. Deploy the updated backend and frontend with the new contract ID.
+8. Announce the migration in release notes with the old and new contract IDs.
 
 ### What survives an upgrade
 
@@ -139,13 +199,14 @@ stellar contract invoke --id $CONTRACT_ID -- health
 | Player / scout profiles | Persistent | ✅ Yes |
 | Validator registry | Persistent | ✅ Yes |
 | Milestone / subscription records | Persistent | ✅ Yes |
-| Initialized flag | Instance | ⚠️ Must re-set if wiped |
-| Paused flag | Instance | ⚠️ Must re-set if wiped |
-| Fee config (scout_access) | Instance | ⚠️ Must re-set |
-| XLM token address (scout_access) | Instance | ⚠️ Must re-set |
-| Progress contract link (verification) | Instance | ⚠️ Must re-wire |
+| Contact records and scout indexes | Persistent | ✅ Yes |
+| Initialized flag | Instance | ⚠️ Must re-verify |
+| Paused flag | Instance | ⚠️ Must re-verify |
+| Fee config (scout_access) | Instance | ⚠️ Must re-verify / re-set |
+| XLM token address (scout_access) | Instance | ⚠️ Must re-verify |
+| Progress contract link (all) | Instance | ⚠️ Must re-wire |
 
-> **Note:** On Stellar, instance storage is **not** automatically wiped during an `upgrade()` call — only the contract code (WASM) is replaced. The table above reflects the risk if the new WASM changes the storage layout or if instance TTL expires. Always re-verify instance state after an upgrade.
+> **Note:** On Stellar, instance storage is **not** automatically wiped during an `upgrade()` call — only the contract code (WASM) is replaced. The table above reflects the risk if the new WASM changes the storage layout or if instance TTL expires before the upgrade completes. Always re-verify instance state after an upgrade using `scripts/upgrade.sh` or the manual steps above.
 
 ## Common Mistakes
 
