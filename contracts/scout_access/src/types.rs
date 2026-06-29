@@ -73,4 +73,6 @@ pub enum DataKey {
     /// (scout, player_id) → u64 timestamp of the last trial offer sent
     /// Used to enforce the per-(scout, player) cooldown window.
     TrialOfferLastSent(Address, u64),
+    /// Index: SubscriptionTier → Vec<Address> of scouts at that tier
+    SubscribersByTier(SubscriptionTier),
 }

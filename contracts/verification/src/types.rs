@@ -46,8 +46,8 @@ pub enum DataKey {
     MilestoneCounter(u64),
     Milestone(u64, u32),
     ValidatorMilestoneCount(Address),
-    /// progress contract address (cross-contract calls)
-    ProgressContract,
+    ValidatorPlayerMilestoneCount(Address, u64),
     ValidatorVector,
     TotalMilestoneCount,
+    ActiveValidatorCount,
 }

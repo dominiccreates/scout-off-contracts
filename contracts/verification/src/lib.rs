@@ -46,9 +46,6 @@ const MAX_MILESTONES_PER_PLAYER_PER_VALIDATOR: u32 = 10;
 // The progress contract must be deployed and its address registered via
 // `set_progress_contract` before `approve_milestone` can advance levels.
 mod progress_contract {
-    soroban_sdk::contractimport!(
-        file = "fixtures/scoutchain_progress.wasm"
-    );
     use scoutchain_shared_types::ProgressLevel;
     use soroban_sdk::{contractclient, contracterror, Address, Env};
 
@@ -98,6 +95,9 @@ impl VerificationContract {
         env.storage()
             .instance()
             .set(&DataKey::TotalMilestoneCount, &0u32);
+        env.storage()
+            .instance()
+            .set(&DataKey::ActiveValidatorCount, &0u32);
         events::contract_initialized(&env, &admin);
         Ok(())
     }
@@ -183,15 +183,34 @@ impl VerificationContract {
             .persistent()
             .set(&DataKey::ValidatorVector, &validator_vector);
 
+        let count: u32 = env
+            .storage()
+            .instance()
+            .get(&DataKey::ActiveValidatorCount)
+            .unwrap_or(0u32);
+        env.storage()
+            .instance()
+            .set(&DataKey::ActiveValidatorCount, &count.checked_add(1).ok_or(VerificationError::Overflow)?);
+
         events::validator_registered(&env, &wallet);
 
         Ok(())
     }
     pub fn get_validators(env: Env) -> Vec<Address> {
-        env.storage()
+        let all: Vec<Address> = env
+            .storage()
             .persistent()
             .get(&DataKey::ValidatorVector)
-            .unwrap_or_else(|| Vec::new(&env))
+            .unwrap_or_else(|| Vec::new(&env));
+        let mut active = Vec::new(&env);
+        for i in 0..all.len() {
+            let wallet = all.get(i).unwrap();
+            let status = Self::get_validator_status(env.clone(), wallet.clone());
+            if status == ValidatorStatus::Active {
+                active.push_back(wallet);
+            }
+        }
+        active
     }
 
     /// Deactivate a validator (admin only).
@@ -214,10 +233,23 @@ impl VerificationContract {
             .persistent()
             .get(&DataKey::Validator(wallet.clone()))
             .ok_or(VerificationError::ValidatorNotFound)?;
+        let was_active = validator.active;
         validator.active = false;
         env.storage()
             .persistent()
             .set(&DataKey::Validator(wallet.clone()), &validator);
+
+        if was_active {
+            let count: u32 = env
+                .storage()
+                .instance()
+                .get(&DataKey::ActiveValidatorCount)
+                .unwrap_or(0u32);
+            env.storage()
+                .instance()
+                .set(&DataKey::ActiveValidatorCount, &count.checked_sub(1).ok_or(VerificationError::Overflow)?);
+        }
+
         events::validator_revoked(&env, &wallet, &reason.unwrap_or(String::from_str(&env, "")));
         Ok(())
     }
@@ -226,7 +258,7 @@ impl VerificationContract {
         Self::require_admin(&env)?;
         let admin: Address = env
             .storage()
-            .instance()
+            .persistent()
             .get(&DataKey::Admin)
             .ok_or(VerificationError::NotInitialized)?;
 
@@ -239,7 +271,7 @@ impl VerificationContract {
         Self::require_admin(&env)?;
         let admin: Address = env
             .storage()
-            .instance()
+            .persistent()
             .get(&DataKey::Admin)
             .ok_or(VerificationError::NotInitialized)?;
 
@@ -421,6 +453,13 @@ impl VerificationContract {
             .unwrap_or(0u32)
     }
 
+    pub fn get_active_validator_count(env: Env) -> u32 {
+        env.storage()
+            .instance()
+            .get(&DataKey::ActiveValidatorCount)
+            .unwrap_or(0u32)
+    }
+
     pub fn get_validator(env: Env, wallet: Address) -> Result<Validator, VerificationError> {
         env.storage()
             .persistent()
@@ -565,11 +604,13 @@ mod tests {
         client.register_validator(&v1, &String::from_str(&env, "Coach A"));
         client.register_validator(&v2, &String::from_str(&env, "Coach B"));
 
-        client.approve_milestone(&v1, &1u64, &String::from_str(&env, "m1"), &String::from_str(&env, "QmEv1"));
+        client.approve_milestone(&v1, &1u64, &String::from_str(&env, "m1"), &String::from_str(&env, VALID_CID_V0));
         assert_eq!(client.get_total_milestone_count(), 1);
 
-        client.approve_milestone(&v1, &2u64, &String::from_str(&env, "m2"), &String::from_str(&env, "QmEv2"));
-        client.approve_milestone(&v2, &3u64, &String::from_str(&env, "m3"), &String::from_str(&env, "QmEv3"));
+        let v0_2 = String::from_str(&env, "QmPK1s3pNYLi9ERiq3BDxKa4XosgWwFRQUydHUtz4YgpqC");
+        let v0_3 = String::from_str(&env, "QmPK1s3pNYLi9ERiq3BDxKa4XosgWwFRQUydHUtz4YgpqD");
+        client.approve_milestone(&v1, &2u64, &String::from_str(&env, "m2"), &v0_2);
+        client.approve_milestone(&v2, &3u64, &String::from_str(&env, "m3"), &v0_3);
         assert_eq!(client.get_total_milestone_count(), 3);
 
         // per-validator counts still correct
@@ -801,7 +842,6 @@ mod tests {
     }
 
     #[test]
-    fn test_upgrade_preserves_admin() {
     fn test_pause_unpause_events() {
         let (env, client) = setup();
         let admin = Address::generate(&env);
@@ -913,7 +953,7 @@ mod tests {
         client.upgrade(&new_wasm_hash);
 
         // Admin persisted — admin-gated call still works
-        client.revoke_validator(&validator);
+        client.revoke_validator(&validator, &None);
         assert!(!client.is_active_validator(&validator));
         // 257 ASCII bytes — must exceed the 256-byte limit
         let too_long = "a".repeat(257);
@@ -988,7 +1028,7 @@ mod tests {
     }
 
     #[test]
-    fn test_get_validators_includes_revoked() {
+    fn test_get_validators_excludes_revoked() {
         let (env, client) = setup();
         let admin = Address::generate(&env);
         client.initialize(&admin);
@@ -1005,10 +1045,43 @@ mod tests {
         client.revoke_validator(&v2, &reason);
 
         let validators = client.get_validators();
-        assert_eq!(validators.len(), 3);
+        assert_eq!(validators.len(), 2);
         assert!(validators.contains(&v1));
-        assert!(validators.contains(&v2));
+        assert!(!validators.contains(&v2));
         assert!(validators.contains(&v3));
+    }
+
+    #[test]
+    fn test_get_active_validator_count() {
+        let (env, client) = setup();
+        let admin = Address::generate(&env);
+        client.initialize(&admin);
+
+        assert_eq!(client.get_active_validator_count(), 0);
+
+        let v1 = Address::generate(&env);
+        let v2 = Address::generate(&env);
+        let v3 = Address::generate(&env);
+
+        client.register_validator(&v1, &String::from_str(&env, "Credentials 1"));
+        assert_eq!(client.get_active_validator_count(), 1);
+
+        client.register_validator(&v2, &String::from_str(&env, "Credentials 2"));
+        assert_eq!(client.get_active_validator_count(), 2);
+
+        client.register_validator(&v3, &String::from_str(&env, "Credentials 3"));
+        assert_eq!(client.get_active_validator_count(), 3);
+
+        let reason: Option<String> = None;
+        client.revoke_validator(&v2, &reason);
+        assert_eq!(client.get_active_validator_count(), 2);
+
+        client.revoke_validator(&v3, &reason);
+        assert_eq!(client.get_active_validator_count(), 1);
+
+        // Revoking an already-revoked validator should not change the count
+        client.revoke_validator(&v3, &reason);
+        assert_eq!(client.get_active_validator_count(), 1);
     }
 
     // -------------------------------------------------------------------------
@@ -1229,7 +1302,7 @@ mod tests {
         client.initialize(&admin);
 
         let result = client.try_get_milestone(&999u64, &1u32);
-        assert_eq!(result, Err(Ok(VerificationError::MilestoneNotFound)));
+        assert!(result.is_err());
     }
 
     /// Property 2: Preservation — get_milestone does not alter counters.

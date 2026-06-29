@@ -230,7 +230,7 @@ impl ScoutAccessContract {
         // tier or an upgrade. Downgrades before expiry are rejected.
         // Also enforce a minimum interval between subscribe calls to prevent
         // race conditions / double-charging on rapid upgrades.
-        if let Some(existing) = env
+        let old_tier = if let Some(existing) = env
             .storage()
             .persistent()
             .get::<DataKey, Subscription>(&DataKey::Subscription(scout.clone()))
@@ -247,7 +247,10 @@ impl ScoutAccessContract {
                     return Err(ScoutAccessError::UpgradeTooSoon);
                 }
             }
-        }
+            Some(existing.tier)
+        } else {
+            None
+        };
 
         let config = Self::fee_config(&env);
         let fee = match &tier {
@@ -275,6 +278,14 @@ impl ScoutAccessContract {
             PERSISTENT_TTL_MIN,
             PERSISTENT_TTL_MAX,
         );
+
+        // Update tier index: remove from old tier, add to new tier
+        if let Some(old) = old_tier {
+            if old != tier {
+                Self::subscribers_index_remove(&env, &old, &scout);
+            }
+        }
+        Self::subscribers_index_add(&env, &tier, &scout);
 
         events::scout_subscribed(&env, &scout, &tier, fee);
         Ok(())
@@ -550,6 +561,16 @@ impl ScoutAccessContract {
             .unwrap_or(0i128)
     }
 
+    pub fn get_subscribers_by_tier(
+        env: Env,
+        tier: SubscriptionTier,
+    ) -> soroban_sdk::Vec<Address> {
+        env.storage()
+            .persistent()
+            .get(&DataKey::SubscribersByTier(tier))
+            .unwrap_or_else(|| soroban_sdk::Vec::new(&env))
+    }
+
     pub fn has_contacted(env: Env, scout: Address, player_id: u64) -> bool {
         Self::bump_instance_ttl(&env);
         let key = DataKey::ContactRecord(player_id, scout);
@@ -810,6 +831,32 @@ impl ScoutAccessContract {
             SubscriptionTier::Basic => 1,
             SubscriptionTier::Pro => 2,
             SubscriptionTier::Elite => 3,
+        }
+    }
+
+    fn subscribers_index_add(env: &Env, tier: &SubscriptionTier, scout: &Address) {
+        let key = DataKey::SubscribersByTier(tier.clone());
+        let mut list: soroban_sdk::Vec<Address> = env
+            .storage()
+            .persistent()
+            .get(&key)
+            .unwrap_or_else(|| soroban_sdk::Vec::new(env));
+        if !list.contains(scout.clone()) {
+            list.push_back(scout.clone());
+            env.storage().persistent().set(&key, &list);
+        }
+    }
+
+    fn subscribers_index_remove(env: &Env, tier: &SubscriptionTier, scout: &Address) {
+        let key = DataKey::SubscribersByTier(tier.clone());
+        let mut list: soroban_sdk::Vec<Address> = env
+            .storage()
+            .persistent()
+            .get(&key)
+            .unwrap_or_else(|| soroban_sdk::Vec::new(env));
+        if let Some(pos) = list.iter().position(|a| a == scout.clone()) {
+            list.remove(pos as u32);
+            env.storage().persistent().set(&key, &list);
         }
     }
 }
