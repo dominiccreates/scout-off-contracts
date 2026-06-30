@@ -1,6 +1,16 @@
 pub use scoutchain_shared_types::ContractHealth;
 use soroban_sdk::{contracttype, Address, String, Vec};
 
+/// A player's dispute of a milestone approval (issue #471).
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct MilestoneDispute {
+    pub player_id: u64,
+    pub milestone_index: u32,
+    pub reason: String,
+    pub disputed_at: u64,
+}
+
 /// Richer validator status — distinguishes unregistered from revoked.
 #[contracttype]
 #[derive(Clone, Debug, PartialEq)]
@@ -51,6 +61,16 @@ pub struct GlobalMilestoneIndexPage {
     pub total: u32,
 }
 
+/// A player-initiated dispute for a milestone.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct MilestoneDispute {
+    pub player_id: u64,
+    pub milestone_index: u32,
+    pub reason: String,
+    pub disputed_at: u64,
+}
+
 #[contracttype]
 pub enum DataKey {
     Admin,
@@ -66,4 +86,9 @@ pub enum DataKey {
     ValidatorVector,
     TotalMilestoneCount,
     GlobalMilestoneIndex,
+    /// Persistent index: validator wallet → Vec<u64> of distinct player_ids
+    /// for which that validator has approved at least one milestone.
+    /// Updated on every `approve_milestone` call (duplicates are skipped).
+    ValidatorPlayers(Address),
+    MilestoneDispute(u64, u32),
 }
