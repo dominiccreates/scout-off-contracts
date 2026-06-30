@@ -102,4 +102,12 @@ pub enum DataKey {
     /// Used by `filter_players` for combined level+region queries so only
     /// matching players are loaded, avoiding a full scan of `PlayerIndex`.
     PlayersByLevelRegion(ProgressLevel, String),
+    /// Per-level sub-index: ProgressLevel → Vec<u64> of player IDs.
+    /// Primary lookup path for level-filtered queries without a region constraint.
+    /// Falls back to `PlayerIndex` only when no level filter is specified.
+    PlayersByLevel(ProgressLevel),
+    /// Deactivation flag for a player. When present and `true`, the player is
+    /// hidden from `filter_players` results while their profile and history are
+    /// fully preserved. Set by `deactivate_player`, cleared by `reactivate_player`.
+    PlayerDeactivated(u64),
 }
