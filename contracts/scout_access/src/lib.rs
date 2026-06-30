@@ -2038,4 +2038,42 @@ assert_eq!(
         assert!(result.is_ok());
         assert_eq!(client.get_trial_count(&player_id), 1);
     }
+
+    // -------------------------------------------------------------------------
+    // Issue #443: log_trial_offer must validate details_hash as a valid CID
+    // -------------------------------------------------------------------------
+
+    /// log_trial_offer with a plain invalid string must return InvalidInput (code 15).
+    #[test]
+    fn test_log_trial_offer_invalid_hash_returns_invalid_input() {
+        let (env, admin, xlm, _contract_id, client) = setup();
+        let scout = Address::generate(&env);
+        mint_token(&env, &xlm, &admin, &scout, 100_000_000);
+
+        client.subscribe(&scout, &SubscriptionTier::Elite);
+
+        // A plain string that is neither CIDv0 nor CIDv1
+        let result = client.try_log_trial_offer(
+            &scout,
+            &1u64,
+            &String::from_str(&env, "not-a-valid-cid"),
+        );
+        assert_eq!(result, Err(Ok(ScoutAccessError::InvalidInput)));
+    }
+
+    /// log_trial_offer with a valid CIDv0 hash must succeed.
+    #[test]
+    fn test_log_trial_offer_valid_cidv0_hash_succeeds() {
+        let (env, admin, xlm, _contract_id, client) = setup();
+        let scout = Address::generate(&env);
+        mint_token(&env, &xlm, &admin, &scout, 100_000_000);
+
+        client.subscribe(&scout, &SubscriptionTier::Elite);
+
+        // Valid CIDv0: starts with "Qm", exactly 46 characters
+        let valid_cid = String::from_str(&env, "QmPK1s3pNYLi9ERiq3BDxKa4XosgWwFRQUydHUtz4YgpqB");
+        let result = client.try_log_trial_offer(&scout, &1u64, &valid_cid);
+        assert!(result.is_ok(), "valid CIDv0 must be accepted by log_trial_offer");
+        assert_eq!(client.get_trial_count(&1u64), 1);
+    }
 }
