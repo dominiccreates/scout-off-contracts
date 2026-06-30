@@ -71,3 +71,10 @@ pub fn progress_contract_updated(env: &Env, progress_contract: &Address) {
         progress_contract.clone(),
     );
 }
+
+pub fn fee_config_updated(env: &Env, old_config: &crate::types::FeeConfig, new_config: &crate::types::FeeConfig) {
+    env.events().publish(
+        (Symbol::new(env, "fee_config_updated"),),
+        (old_config.clone(), new_config.clone()),
+    );
+}

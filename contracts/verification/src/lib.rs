@@ -1397,4 +1397,54 @@ mod tests {
         assert_eq!(client.get_milestone_count(&player_id), milestone_count_before);
         assert_eq!(client.get_validator_milestone_count(&validator), validator_count_before);
     }
+
+    // -------------------------------------------------------------------------
+    // Duplicate validator registration tests
+    // -------------------------------------------------------------------------
+
+    /// Test that register_validator fails when called with an already-registered wallet.
+    ///
+    /// Steps:
+    ///   1. Initialize contract and register a validator
+    ///   2. Attempt to register the same wallet again
+    ///   3. Assert the second registration returns ValidatorAlreadyRegistered error
+    ///   4. Verify the validator record in storage is unchanged
+    ///   5. Verify the ValidatorVector length remains 1 (no duplicate added)
+    ///
+    /// **Validates: Duplicate registration check in register_validator**
+    #[test]
+    fn test_register_validator_already_registered_wallet_fails() {
+        let (env, client) = setup();
+        let admin = Address::generate(&env);
+        client.initialize(&admin);
+
+        let validator = Address::generate(&env);
+        let credentials = String::from_str(&env, "UEFA A License");
+
+        // First registration succeeds
+        client.register_validator(&validator, &credentials);
+        assert!(client.is_active_validator(&validator));
+        
+        // Verify validator is in the vector
+        let validators = client.get_validators();
+        assert_eq!(validators.len(), 1);
+        assert_eq!(validators.get(0).unwrap(), validator);
+
+        // Second registration with the same wallet should fail
+        let result = client.try_register_validator(
+            &validator,
+            &String::from_str(&env, "Different credentials")
+        );
+        assert_eq!(result, Err(Ok(VerificationError::ValidatorAlreadyRegistered)));
+
+        // Verify validator record is unchanged after the second call
+        let stored_validator = client.get_validator(&validator);
+        assert_eq!(stored_validator.wallet, validator);
+        assert_eq!(stored_validator.credentials, credentials);
+        assert!(stored_validator.active);
+
+        // Verify ValidatorVector length remains 1 (no duplicate added)
+        let validators_after = client.get_validators();
+        assert_eq!(validators_after.len(), 1);
+    }
 }
