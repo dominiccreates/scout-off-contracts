@@ -61,6 +61,8 @@ jobs:
           shellcheck scripts/setup-testnet.sh
           shellcheck scripts/generate-bindings.sh
           shellcheck scripts/check-bindings.sh
+          shellcheck scripts/health-check.sh
+          shellcheck scripts/rollback.sh
           shellcheck testnet/seed.sh
       - name: Docs completeness check
         run: bash scripts/check-docs.sh
@@ -89,9 +91,10 @@ jobs:
             target
           key: ${{ runner.os }}-cargo-wasm32v1-${{ hashFiles('**/Cargo.lock') }}
 
-      - name: Install Stellar CLI
+      - name: Install Stellar CLI (pinned)
         run: |
-          curl -sSL https://raw.githubusercontent.com/stellar/stellar-cli/main/install.sh | bash
+          STELLAR_CLI_VERSION="21.6.0"
+          curl -sSL "https://raw.githubusercontent.com/stellar/stellar-cli/v${STELLAR_CLI_VERSION}/install.sh" | bash
           echo "$HOME/.stellar/bin" >> "$GITHUB_PATH"
 
       - name: Install Node.js

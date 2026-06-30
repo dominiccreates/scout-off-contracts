@@ -228,3 +228,52 @@ stellar contract invoke --id $SCOUT_ACCESS_CONTRACT_ID \
 ```
 
 This must be done once after every fresh deployment.
+
+---
+
+## Rollback Procedure
+
+If a deployment partially fails (e.g. `registration` and `verification` succeed but `progress`
+fails), the system ends up in an inconsistent state. The rollback procedure restores the last
+known good contract addresses automatically.
+
+### How it works
+
+`deploy.sh` writes a snapshot of the current `.env.contracts` to `.env.contracts.snapshot`
+**before** making any changes. If a deployment fails, you can restore from that snapshot.
+
+### Automatic rollback (CI)
+
+If the CI deploy pipeline fails, it prints rollback instructions. Run:
+
+```bash
+./scripts/rollback.sh testnet   # or mainnet
+```
+
+This script:
+1. Restores `.env.contracts` from `.env.contracts.snapshot`
+2. Runs `scripts/health-check.sh` to verify the restored contracts are responsive
+
+### Manual rollback
+
+```bash
+# Inspect the snapshot
+cat .env.contracts.snapshot
+
+# Restore it
+cp .env.contracts.snapshot .env.contracts
+
+# Verify contracts are healthy
+./scripts/health-check.sh testnet
+```
+
+### When there is no snapshot
+
+A snapshot is only created when `.env.contracts` already exists at the start of a deployment
+(i.e. there was a previous successful deployment). For a first-time deployment failure there is
+no snapshot — you must re-deploy from scratch:
+
+```bash
+./scripts/deploy.sh testnet
+./scripts/initialize.sh testnet
+```
