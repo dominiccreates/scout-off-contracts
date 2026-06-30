@@ -23,6 +23,12 @@ fi
 WASM_DIR="target/wasm32-unknown-unknown/release"
 WASM_DIR="target/wasm32v1-none/release"
 
+# Save a pre-deploy snapshot so rollback.sh can restore the last known good state
+if [[ -f ".env.contracts" ]]; then
+  cp .env.contracts .env.contracts.snapshot
+  echo "==> Pre-deploy snapshot saved to .env.contracts.snapshot"
+fi
+
 if command -v sha256sum >/dev/null 2>&1; then
   hash_wasm() { sha256sum "$1" | awk '{print $1}'; }
 else
@@ -94,4 +100,6 @@ cat > .env.contracts.json <<EOF
 EOF
 
 echo ""
-echo "==> All contracts deployed. IDs saved to .env.contracts and .env.contracts.json"
+echo "==> All contracts deployed. IDs saved to .env.contracts"
+echo "    Pre-deploy snapshot is at .env.contracts.snapshot"
+echo "    To roll back: ./scripts/rollback.sh $NETWORK"
