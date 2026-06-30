@@ -227,6 +227,31 @@ impl VerificationContract {
         Ok(())
     }
 
+    /// Re-activate a previously revoked validator (admin only).
+    ///
+    /// Sets `validator.active = true` so the validator can approve milestones
+    /// again immediately without losing their milestone history or credentials
+    /// (closes #475).
+    ///
+    /// Returns `ValidatorNotFound` if the wallet has never been registered.
+    pub fn restore_validator(env: Env, wallet: Address) -> Result<(), VerificationError> {
+        Self::require_admin(&env)?;
+
+        let mut validator: Validator = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Validator(wallet.clone()))
+            .ok_or(VerificationError::ValidatorNotFound)?;
+
+        validator.active = true;
+        env.storage()
+            .persistent()
+            .set(&DataKey::Validator(wallet.clone()), &validator);
+
+        events::validator_restored(&env, &wallet);
+        Ok(())
+    }
+
     pub fn pause_contract(env: Env) -> Result<(), VerificationError> {
         Self::require_admin(&env)?;
         let admin: Address = env
@@ -1396,5 +1421,121 @@ mod tests {
         // Assert counters are unchanged.
         assert_eq!(client.get_milestone_count(&player_id), milestone_count_before);
         assert_eq!(client.get_validator_milestone_count(&validator), validator_count_before);
+    }
+
+    // -------------------------------------------------------------------------
+    // #475: restore_validator
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn test_restore_validator_reactivates_revoked_validator() {
+        let (env, client) = setup();
+        let admin = Address::generate(&env);
+        client.initialize(&admin);
+
+        let validator = Address::generate(&env);
+        client.register_validator(&validator, &String::from_str(&env, "Coach"));
+
+        let reason: Option<String> = None;
+        client.revoke_validator(&validator, &reason);
+        assert!(!client.is_active_validator(&validator));
+
+        // Restore — validator must be active again
+        client.restore_validator(&validator);
+        assert!(client.is_active_validator(&validator));
+    }
+
+    #[test]
+    fn test_restore_validator_emits_event() {
+        let (env, client) = setup();
+        let admin = Address::generate(&env);
+        let contract_id = env.register_contract(None, VerificationContract);
+        // Use a fresh client bound to this specific contract to isolate events.
+        let client2 = VerificationContractClient::new(&env, &contract_id);
+        client2.initialize(&admin);
+
+        let validator = Address::generate(&env);
+        client2.register_validator(&validator, &String::from_str(&env, "Coach"));
+
+        // Clear events from registration
+        env.events().all();
+
+        let reason: Option<String> = None;
+        client2.revoke_validator(&validator, &reason);
+        client2.restore_validator(&validator);
+
+        let emitted = env.events().all().filter_by_contract(&contract_id);
+        let has_restored = emitted.iter().any(|(_, topics, payload)| {
+            topics == (Symbol::new(&env, "validator_restored"),).into_val(&env)
+                && payload == validator.clone().into_val(&env)
+        });
+        assert!(has_restored, "validator_restored event must be emitted with wallet address");
+    }
+
+    #[test]
+    fn test_restored_validator_can_approve_milestones() {
+        // Acceptance criteria: revoke → restore → approve milestone succeeds
+        let (env, client) = setup();
+        let admin = Address::generate(&env);
+        client.initialize(&admin);
+
+        let validator = Address::generate(&env);
+        client.register_validator(&validator, &String::from_str(&env, "Coach"));
+
+        // Revoke
+        let reason: Option<String> = None;
+        client.revoke_validator(&validator, &reason);
+        assert!(!client.is_active_validator(&validator));
+
+        // Restore
+        client.restore_validator(&validator);
+        assert!(client.is_active_validator(&validator));
+
+        // Restored validator must be able to approve milestones
+        let result = client.try_approve_milestone(
+            &validator,
+            &1u64,
+            &String::from_str(&env, "Identity confirmed"),
+            &String::from_str(&env, VALID_CID_V0),
+        );
+        assert!(result.is_ok(), "restored validator must be able to approve milestones");
+    }
+
+    #[test]
+    fn test_restore_validator_not_found_returns_error() {
+        let (env, client) = setup();
+        let admin = Address::generate(&env);
+        client.initialize(&admin);
+
+        let unknown = Address::generate(&env);
+        let result = client.try_restore_validator(&unknown);
+        assert_eq!(result, Err(Ok(VerificationError::ValidatorNotFound)));
+    }
+
+    #[test]
+    fn test_restore_preserves_milestone_history() {
+        let (env, client) = setup();
+        let admin = Address::generate(&env);
+        client.initialize(&admin);
+
+        let validator = Address::generate(&env);
+        client.register_validator(&validator, &String::from_str(&env, "Coach"));
+
+        // Approve a milestone before revoking
+        client.approve_milestone(
+            &validator,
+            &1u64,
+            &String::from_str(&env, "Speed test"),
+            &String::from_str(&env, VALID_CID_V0),
+        );
+        let count_before = client.get_validator_milestone_count(&validator);
+
+        // Revoke then restore
+        let reason: Option<String> = None;
+        client.revoke_validator(&validator, &reason);
+        client.restore_validator(&validator);
+
+        // Milestone count must be unchanged after restore
+        assert_eq!(client.get_validator_milestone_count(&validator), count_before);
     }
 }
