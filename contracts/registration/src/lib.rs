@@ -28,6 +28,9 @@ const MAX_REGION_LEN: u32 = 128;
 const MAX_STRING_LEN: u32 = 64;
 const MAX_IPFS_HASHES: u32 = 10;
 const MAX_BATCH_SIZE: u32 = 20;
+/// Maximum plausible age for a registered player. Ages above this value are
+/// rejected as implausible to prevent corrupt entries in discovery filters.
+const MAX_PLAYER_AGE: u32 = 100;
 
 // Instance TTL bump
 const INSTANCE_TTL_MIN: u32 = 100;
@@ -150,6 +153,11 @@ impl RegistrationContract {
             || vitals.region.len() > MAX_STRING_LEN
             || vitals.nationality.len() > MAX_STRING_LEN
         {
+            return Err(ScoutChainError::InvalidInput);
+        }
+
+        // Validate age upper bound
+        if vitals.age > MAX_PLAYER_AGE {
             return Err(ScoutChainError::InvalidInput);
         }
 
@@ -1839,5 +1847,69 @@ fn test_upgrade_preserves_admin() {
         let profile = client.get_player(&player_id);
         assert_eq!(profile.wallet, wallet);
         assert_eq!(profile.level, ProgressLevel::Unverified);
+    }
+
+    // -------------------------------------------------------------------------
+    // Issue #444: register_player age field must reject implausible upper values
+    // -------------------------------------------------------------------------
+
+    /// An age of MAX_PLAYER_AGE (100) must be accepted.
+    #[test]
+    fn test_register_player_age_at_max_succeeds() {
+        let (env, client) = setup();
+        let admin = Address::generate(&env);
+        client.initialize(&admin);
+
+        let wallet = Address::generate(&env);
+        let vitals = PlayerVitals {
+            age: 100, // exactly MAX_PLAYER_AGE
+            position: String::from_str(&env, "Forward"),
+            region: String::from_str(&env, "West Africa"),
+            nationality: String::from_str(&env, "Ghana"),
+        };
+        let hashes = vec![&env, String::from_str(&env, "QmAgeTest")];
+
+        let result = client.try_register_player(&wallet, &vitals, &hashes);
+        assert!(result.is_ok(), "age == MAX_PLAYER_AGE should succeed");
+    }
+
+    /// An age of MAX_PLAYER_AGE + 1 (101) must be rejected with InvalidInput.
+    #[test]
+    fn test_register_player_age_above_max_returns_invalid_input() {
+        let (env, client) = setup();
+        let admin = Address::generate(&env);
+        client.initialize(&admin);
+
+        let wallet = Address::generate(&env);
+        let vitals = PlayerVitals {
+            age: 101, // one above MAX_PLAYER_AGE
+            position: String::from_str(&env, "Forward"),
+            region: String::from_str(&env, "West Africa"),
+            nationality: String::from_str(&env, "Ghana"),
+        };
+        let hashes = vec![&env, String::from_str(&env, "QmAgeTest")];
+
+        let result = client.try_register_player(&wallet, &vitals, &hashes);
+        assert_eq!(result, Err(Ok(ScoutChainError::InvalidInput)));
+    }
+
+    /// An implausibly large age (999) must also be rejected with InvalidInput.
+    #[test]
+    fn test_register_player_implausible_age_returns_invalid_input() {
+        let (env, client) = setup();
+        let admin = Address::generate(&env);
+        client.initialize(&admin);
+
+        let wallet = Address::generate(&env);
+        let vitals = PlayerVitals {
+            age: 999,
+            position: String::from_str(&env, "Forward"),
+            region: String::from_str(&env, "West Africa"),
+            nationality: String::from_str(&env, "Ghana"),
+        };
+        let hashes = vec![&env, String::from_str(&env, "QmAgeTest")];
+
+        let result = client.try_register_player(&wallet, &vitals, &hashes);
+        assert_eq!(result, Err(Ok(ScoutChainError::InvalidInput)));
     }
 }
