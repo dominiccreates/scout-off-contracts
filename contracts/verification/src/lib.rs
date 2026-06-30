@@ -465,6 +465,7 @@ impl VerificationContract {
         env.storage()
             .persistent()
             .set(&val_key, &(val_count.checked_add(1).ok_or(VerificationError::Overflow)?));
+        env.storage().persistent().extend_ttl(&val_key, PERSISTENT_TTL_MIN, PERSISTENT_TTL_MAX);
 
         env.storage().persistent().set(
             &vp_key,
