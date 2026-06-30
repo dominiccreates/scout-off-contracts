@@ -43,6 +43,20 @@ pub struct TrialOffer {
     pub logged_at: u64,
 }
 
+/// Tracks the number of contacts a Pro-tier scout has made in their current
+/// subscription period.  `period_start` is the `subscribed_at` timestamp of
+/// the current subscription; when the scout renews, a new record is stored
+/// (keyed by the new `subscribed_at`), effectively resetting the counter.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct ProContactPeriod {
+    /// `subscribed_at` of the subscription this counter belongs to.
+    /// Used to detect period rollovers on subscription renewal.
+    pub period_start: u64,
+    /// Number of contacts made in this period.
+    pub count: u32,
+}
+
 /// Platform fee configuration
 #[contracttype]
 #[derive(Clone, Debug)]
