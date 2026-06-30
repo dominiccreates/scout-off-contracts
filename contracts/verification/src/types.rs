@@ -1,5 +1,15 @@
 pub use scoutchain_shared_types::ContractHealth;
-use soroban_sdk::{contracttype, Address, String};
+use soroban_sdk::{contracttype, Address, String, Vec};
+
+/// A player's dispute of a milestone approval (issue #471).
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct MilestoneDispute {
+    pub player_id: u64,
+    pub milestone_index: u32,
+    pub reason: String,
+    pub disputed_at: u64,
+}
 
 /// Richer validator status — distinguishes unregistered from revoked.
 #[contracttype]
@@ -12,7 +22,7 @@ pub enum ValidatorStatus {
 
 /// A single verified milestone record
 #[contracttype]
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Milestone {
     pub player_id: u64,
     pub validator: Address,
@@ -35,12 +45,30 @@ pub struct Validator {
     pub active: bool,
 }
 
-/// Reference to a milestone approved by a validator: (player_id, milestone_index)
+/// Entry in the global milestone index for on-chain auditability.
 #[contracttype]
 #[derive(Clone, Debug)]
-pub struct MilestoneRef {
+pub struct GlobalMilestoneEntry {
     pub player_id: u64,
     pub milestone_index: u32,
+}
+
+/// Paginated response for global milestone index queries.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct GlobalMilestoneIndexPage {
+    pub entries: Vec<GlobalMilestoneEntry>,
+    pub total: u32,
+}
+
+/// A player-initiated dispute for a milestone.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct MilestoneDispute {
+    pub player_id: u64,
+    pub milestone_index: u32,
+    pub reason: String,
+    pub disputed_at: u64,
 }
 
 #[contracttype]
@@ -54,11 +82,13 @@ pub enum DataKey {
     MilestoneCounter(u64),
     Milestone(u64, u32),
     ValidatorMilestoneCount(Address),
-    /// progress contract address (cross-contract calls)
-    ProgressContract,
+    ValidatorPlayerMilestoneCount(Address, u64),
     ValidatorVector,
     TotalMilestoneCount,
-    ValidatorPlayerMilestoneCount(Address, u64),
-    /// validator → Vec<MilestoneRef> of milestones approved by this validator
-    ValidatorMilestones(Address),
+    GlobalMilestoneIndex,
+    /// Persistent index: validator wallet → Vec<u64> of distinct player_ids
+    /// for which that validator has approved at least one milestone.
+    /// Updated on every `approve_milestone` call (duplicates are skipped).
+    ValidatorPlayers(Address),
+    MilestoneDispute(u64, u32),
 }
