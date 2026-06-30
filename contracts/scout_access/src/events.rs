@@ -58,6 +58,32 @@ pub fn contract_unpaused(env: &Env, admin: &Address) {
         .publish((Symbol::new(env, "contract_unpaused"),), admin.clone());
 }
 
+pub fn subscription_created(
+    env: &Env,
+    scout: &Address,
+    tier: &SubscriptionTier,
+    subscribed_at: u64,
+    expires_at: u64,
+) {
+    env.events().publish(
+        (Symbol::new(env, "subscription_created"), scout.clone()),
+        (tier.clone(), subscribed_at, expires_at),
+    );
+}
+
+pub fn subscription_renewed(
+    env: &Env,
+    scout: &Address,
+    tier: &SubscriptionTier,
+    subscribed_at: u64,
+    expires_at: u64,
+) {
+    env.events().publish(
+        (Symbol::new(env, "subscription_renewed"), scout.clone()),
+        (tier.clone(), subscribed_at, expires_at),
+    );
+}
+
 pub fn subscription_refunded(env: &Env, scout: &Address, amount: i128) {
     env.events().publish(
         (Symbol::new(env, "subscription_refunded"), scout.clone()),

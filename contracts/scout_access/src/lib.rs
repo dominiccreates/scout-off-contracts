@@ -212,6 +212,12 @@ impl ScoutAccessContract {
     /// 3. Write `Subscription` record to persistent storage.
     ///
     /// Scout must pre-approve the XLM transfer. Downgrades before expiry are rejected.
+    ///
+    /// Emits `subscription_created` for a brand-new subscription or
+    /// `subscription_renewed` when an existing (possibly active) subscription
+    /// is replaced. Both events include scout address, tier, subscribed_at, and
+    /// expires_at so off-chain indexers can reconstruct the full subscription
+    /// history from events alone (closes #462).
     pub fn subscribe(
         env: Env,
         scout: Address,
@@ -223,6 +229,12 @@ impl ScoutAccessContract {
         scout.require_auth();
 
         let now = env.ledger().timestamp();
+
+        // Track whether this is a renewal/upgrade of an existing subscription.
+        let is_renewal = env
+            .storage()
+            .persistent()
+            .has(&DataKey::Subscription(scout.clone()));
 
         // Downgrade guard: if an active subscription exists, only allow same
         // tier or an upgrade. Downgrades before expiry are rejected.
@@ -256,12 +268,14 @@ impl ScoutAccessContract {
 
         Self::collect_fee(&env, &scout, fee)?;
 
+        let expires_at = now
+            .checked_add(config.sub_duration_secs)
+            .ok_or(ScoutAccessError::Overflow)?;
+
         let sub = Subscription {
             scout: scout.clone(),
             tier: tier.clone(),
-            expires_at: now
-                .checked_add(config.sub_duration_secs)
-                .ok_or(ScoutAccessError::Overflow)?,
+            expires_at,
             subscribed_at: now,
         };
 
@@ -274,6 +288,15 @@ impl ScoutAccessContract {
             PERSISTENT_TTL_MAX,
         );
 
+        // Emit a rich auditable event (closes #462).
+        // subscription_renewed covers same-tier renewals and tier upgrades;
+        // subscription_created covers a scout's very first subscription.
+        if is_renewal {
+            events::subscription_renewed(&env, &scout, &tier, now, expires_at);
+        } else {
+            events::subscription_created(&env, &scout, &tier, now, expires_at);
+        }
+        // Keep the legacy scout_subscribed event for backward compatibility.
         events::scout_subscribed(&env, &scout, &tier, fee);
         Ok(())
     }
@@ -1047,16 +1070,26 @@ mod tests {
 
         client.subscribe(&scout, &SubscriptionTier::Basic);
 
+        let sub = client.get_subscription(&scout);
+        // Both legacy and new events must be emitted.
+        let emitted = env.events().all().filter_by_contract(&contract_id);
+        // subscription_created first, then legacy scout_subscribed
+        assert_eq!(emitted.len(), 2);
         assert_eq!(
-            env.events().all().filter_by_contract(&contract_id),
-            soroban_sdk::vec![
-                &env,
-                (
-                    contract_id.clone(),
-                    (Symbol::new(&env, "scout_subscribed"), scout.clone()).into_val(&env),
-                    (SubscriptionTier::Basic, default_fees().basic_sub_stroops).into_val(&env)
-                )
-            ]
+            emitted.get(0).unwrap(),
+            (
+                contract_id.clone(),
+                (Symbol::new(&env, "subscription_created"), scout.clone()).into_val(&env),
+                (SubscriptionTier::Basic, sub.subscribed_at, sub.expires_at).into_val(&env)
+            )
+        );
+        assert_eq!(
+            emitted.get(1).unwrap(),
+            (
+                contract_id.clone(),
+                (Symbol::new(&env, "scout_subscribed"), scout.clone()).into_val(&env),
+                (SubscriptionTier::Basic, default_fees().basic_sub_stroops).into_val(&env)
+            )
         );
     }
 
@@ -1068,16 +1101,24 @@ mod tests {
 
         client.subscribe(&scout, &SubscriptionTier::Pro);
 
+        let sub = client.get_subscription(&scout);
+        let emitted = env.events().all().filter_by_contract(&contract_id);
+        assert_eq!(emitted.len(), 2);
         assert_eq!(
-            env.events().all().filter_by_contract(&contract_id),
-            soroban_sdk::vec![
-                &env,
-                (
-                    contract_id.clone(),
-                    (Symbol::new(&env, "scout_subscribed"), scout.clone()).into_val(&env),
-                    (SubscriptionTier::Pro, default_fees().pro_sub_stroops).into_val(&env)
-                )
-            ]
+            emitted.get(0).unwrap(),
+            (
+                contract_id.clone(),
+                (Symbol::new(&env, "subscription_created"), scout.clone()).into_val(&env),
+                (SubscriptionTier::Pro, sub.subscribed_at, sub.expires_at).into_val(&env)
+            )
+        );
+        assert_eq!(
+            emitted.get(1).unwrap(),
+            (
+                contract_id.clone(),
+                (Symbol::new(&env, "scout_subscribed"), scout.clone()).into_val(&env),
+                (SubscriptionTier::Pro, default_fees().pro_sub_stroops).into_val(&env)
+            )
         );
     }
 
@@ -2037,5 +2078,101 @@ assert_eq!(
         );
         assert!(result.is_ok());
         assert_eq!(client.get_trial_count(&player_id), 1);
+    }
+
+    // -------------------------------------------------------------------------
+    // #462: subscription_created / subscription_renewed events
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn test_subscription_created_event_emitted_on_first_subscribe() {
+        let (env, admin, xlm, contract_id, client) = setup();
+        let scout = Address::generate(&env);
+        mint_token(&env, &xlm, &admin, &scout, 10_000_000);
+
+        client.subscribe(&scout, &SubscriptionTier::Elite);
+
+        let sub = client.get_subscription(&scout);
+        let emitted = env.events().all().filter_by_contract(&contract_id);
+        // subscription_created at index 0
+        assert_eq!(
+            emitted.get(0).unwrap(),
+            (
+                contract_id.clone(),
+                (Symbol::new(&env, "subscription_created"), scout.clone()).into_val(&env),
+                (SubscriptionTier::Elite, sub.subscribed_at, sub.expires_at).into_val(&env)
+            )
+        );
+        // Event includes scout, tier, and expiry (acceptance criteria #462)
+        assert_eq!(sub.tier, SubscriptionTier::Elite);
+        assert!(sub.expires_at > sub.subscribed_at);
+    }
+
+    #[test]
+    fn test_subscription_renewed_event_emitted_on_renewal() {
+        let (env, admin, xlm, contract_id, client) = setup();
+        let scout = Address::generate(&env);
+        mint_token(&env, &xlm, &admin, &scout, 100_000_000);
+
+        // First subscription
+        client.subscribe(&scout, &SubscriptionTier::Basic);
+
+        // Advance past the minimum upgrade interval and beyond expiry
+        env.ledger().with_mut(|l| {
+            l.timestamp += 31 * 24 * 60 * 60; // 31 days — subscription expired
+        });
+
+        // Renew
+        client.subscribe(&scout, &SubscriptionTier::Basic);
+
+        let sub = client.get_subscription(&scout);
+
+        // Find the subscription_renewed event among all emitted events
+        let emitted = env.events().all().filter_by_contract(&contract_id);
+        let renewed = emitted.iter().find(|(_, topics, _)| {
+            let topics_val: soroban_sdk::Vec<soroban_sdk::Val> =
+                soroban_sdk::Vec::from_array(&env, [*topics]);
+            topics_val
+                .to_string()
+                .contains("subscription_renewed")
+        });
+
+        // Check via topic matching: look for event with symbol "subscription_renewed"
+        let has_renewed = emitted.iter().any(|(_, topics, _)| {
+            topics == (Symbol::new(&env, "subscription_renewed"), scout.clone()).into_val(&env)
+        });
+        assert!(has_renewed, "subscription_renewed event must be emitted on renewal");
+
+        // Event payload must include correct tier and timestamps
+        let renewed_event = emitted.iter().find(|(_, topics, _)| {
+            topics == (Symbol::new(&env, "subscription_renewed"), scout.clone()).into_val(&env)
+        }).unwrap();
+        assert_eq!(
+            renewed_event.2,
+            (SubscriptionTier::Basic, sub.subscribed_at, sub.expires_at).into_val(&env)
+        );
+    }
+
+    #[test]
+    fn test_subscription_event_payload_includes_scout_tier_and_expiry() {
+        let (env, admin, xlm, contract_id, client) = setup();
+        let scout = Address::generate(&env);
+        mint_token(&env, &xlm, &admin, &scout, 10_000_000);
+
+        client.subscribe(&scout, &SubscriptionTier::Pro);
+
+        let sub = client.get_subscription(&scout);
+        let emitted = env.events().all().filter_by_contract(&contract_id);
+
+        // Verify the subscription_created event payload contains tier + timestamps
+        let created_event = emitted.iter().find(|(_, topics, _)| {
+            topics == (Symbol::new(&env, "subscription_created"), scout.clone()).into_val(&env)
+        });
+        assert!(created_event.is_some(), "subscription_created event must be present");
+        let payload = created_event.unwrap().2;
+        assert_eq!(
+            payload,
+            (SubscriptionTier::Pro, sub.subscribed_at, sub.expires_at).into_val(&env)
+        );
     }
 }
