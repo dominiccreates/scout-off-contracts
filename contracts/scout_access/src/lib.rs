@@ -1,4 +1,5 @@
-#![cfg_attr(target_family = "wasm", no_std)]mod errors;
+#![cfg_attr(target_family = "wasm", no_std)]
+mod errors;
 mod events;
 mod types;
 
@@ -43,6 +44,7 @@ const INSTANCE_TTL_MAX: u32 = 500;
 // Persistent storage TTL bump for subscriptions / contact records.
 const PERSISTENT_TTL_MIN: u32 = 200;
 const PERSISTENT_TTL_MAX: u32 = 2_000;
+const ADMIN_BUMP_LEDGERS: u32 = 1000;
 
 // Admin key TTL — kept equal to PERSISTENT_TTL_MAX for simplicity.
 const ADMIN_BUMP_LEDGERS: u32 = 2_000;
@@ -82,12 +84,12 @@ impl ScoutAccessContract {
         xlm_token: Address,
         fee_config: FeeConfig,
     ) -> Result<(), ScoutAccessError> {
-        Self::bump_instance_ttl(&env);
         if env.storage().instance().has(&DataKey::Initialized) {
             return Err(ScoutAccessError::AlreadyInitialized);
         }
-        Self::validate_fee_config(&fee_config)?;
         admin.require_auth();
+        Self::validate_fee_config(&fee_config)?;
+        Self::bump_instance_ttl(&env);
         env.storage().persistent().set(&DataKey::Admin, &admin);
         env.storage().persistent().extend_ttl(&DataKey::Admin, ADMIN_BUMP_LEDGERS, ADMIN_BUMP_LEDGERS);
         env.storage().instance().set(&DataKey::XlmToken, &xlm_token);
@@ -1172,7 +1174,7 @@ impl ScoutAccessContract {
 mod tests {
     use super::*;
     use soroban_sdk::{
-        testutils::{Address as _, Events, Ledger, MockAuth, MockAuthInvoke},
+        testutils::{storage::Instance, Address as _, Events, Ledger, MockAuth, MockAuthInvoke},
         token::{Client as TokenClient, StellarAssetClient},
         Env, IntoVal, String, Symbol,
     };
@@ -2360,7 +2362,10 @@ mod tests {
             contract_balance_before - refund_amount,
             contract_balance_after
         );
-        assert_eq!(scout_balance_before + refund_amount, scout_balance_after);
+        assert_eq!(
+            scout_balance_before + refund_amount,
+            scout_balance_after
+        );
     }
 
     #[test]

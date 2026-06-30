@@ -14,6 +14,7 @@ const INSTANCE_TTL_MAX: u32 = 500;
 
 const PERSISTENT_TTL_MIN: u32 = 500;
 const PERSISTENT_TTL_MAX: u32 = 2000;
+const ADMIN_BUMP_LEDGERS: u32 = 1000;
 
 const ADMIN_BUMP_LEDGERS: u32 = 2_000;
 
@@ -63,11 +64,11 @@ impl ProgressContract {
     // -------------------------------------------------------------------------
 
     pub fn initialize(env: Env, admin: Address) -> Result<(), ProgressError> {
-        Self::bump_instance_ttl(&env);
         if env.storage().instance().has(&DataKey::Initialized) {
             return Err(ProgressError::AlreadyInitialized);
         }
         admin.require_auth();
+        Self::bump_instance_ttl(&env);
         env.storage().persistent().set(&DataKey::Admin, &admin);
         env.storage().persistent().extend_ttl(&DataKey::Admin, ADMIN_BUMP_LEDGERS, ADMIN_BUMP_LEDGERS);
         env.storage().instance().set(&DataKey::Initialized, &true);
@@ -575,7 +576,7 @@ impl ProgressContract {
 mod tests {
     use super::*;
     use soroban_sdk::{
-        testutils::{Address as _, Events as _},
+        testutils::{storage::Instance, Address as _, Events as _},
         vec, Env, IntoVal, Symbol,
     };
 
@@ -786,11 +787,7 @@ mod tests {
 
     #[test]
     fn test_get_progress_history_page() {
-        let (env, client) = setup();
-        let admin = Address::generate(&env);
-        client.initialize(&admin);
-
-        let validator = Address::generate(&env);
+        let (env, client, validator) = setup();
         let player_id = 20u64;
 
         // Advance through all 3 tiers
