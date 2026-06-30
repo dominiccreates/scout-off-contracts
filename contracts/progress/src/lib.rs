@@ -1135,6 +1135,46 @@ mod tests {
         let (_, client, _) = setup();
         assert_eq!(client.get_history_count(&999u64), 0);
     }
+
+    #[test]
+    fn test_pause_unpause_events() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register_contract(None, ProgressContract);
+        let client = ProgressContractClient::new(&env, &contract_id);
+        let admin = Address::generate(&env);
+        client.initialize(&admin);
+        let verification = Address::generate(&env);
+        client.set_verification_contract(&verification);
+
+        client.pause_contract();
+        let events = env.events().all();
+        assert_eq!(
+            events,
+            soroban_sdk::vec![
+                &env,
+                (
+                    client.address.clone(),
+                    (Symbol::new(&env, "contract_paused"),).into_val(&env),
+                    admin.clone().into_val(&env)
+                )
+            ]
+        );
+
+        client.unpause_contract();
+        let events = env.events().all();
+        assert_eq!(
+            events,
+            soroban_sdk::vec![
+                &env,
+                (
+                    client.address.clone(),
+                    (Symbol::new(&env, "contract_unpaused"),).into_val(&env),
+                    admin.clone().into_val(&env)
+                )
+            ]
+        );
+    }
 }
 
 
