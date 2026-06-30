@@ -608,6 +608,24 @@ impl ScoutAccessContract {
             TRIAL_TTL_EXTEND_TO,
         );
 
+        // #468: Update per-scout trial offer index so scouts can enumerate all
+        // trial offers they have logged without an off-chain event index.
+        let scout_index_key = DataKey::ScoutTrialOffers(scout.clone());
+        let mut scout_offers: soroban_sdk::Vec<(u64, u32)> = env
+            .storage()
+            .persistent()
+            .get(&scout_index_key)
+            .unwrap_or_else(|| soroban_sdk::Vec::new(&env));
+        scout_offers.push_back((player_id, next_index));
+        env.storage()
+            .persistent()
+            .set(&scout_index_key, &scout_offers);
+        env.storage().persistent().extend_ttl(
+            &scout_index_key,
+            TRIAL_TTL_THRESHOLD,
+            TRIAL_TTL_EXTEND_TO,
+        );
+
         // Cross-contract call: advance the player to Level 3 if progress contract is set.
         if let Some(progress_addr) = env
             .storage()
@@ -794,6 +812,31 @@ impl ScoutAccessContract {
             initialized,
             paused,
         }
+    }
+
+    /// Returns all (player_id, trial_index) tuples for every trial offer logged
+    /// by `scout`. The returned Vec is in insertion order (oldest first).
+    ///
+    /// Returns an empty Vec for a scout who has not logged any trial offers.
+    /// Each tuple can be passed to `get_trial_offer(player_id, index)` to fetch
+    /// the full offer record (closes #468).
+    pub fn get_scout_trial_offers(
+        env: Env,
+        scout: Address,
+    ) -> soroban_sdk::Vec<(u64, u32)> {
+        Self::bump_instance_ttl(&env);
+        let key = DataKey::ScoutTrialOffers(scout.clone());
+        let list = env
+            .storage()
+            .persistent()
+            .get(&key)
+            .unwrap_or_else(|| soroban_sdk::Vec::new(&env));
+        if !list.is_empty() {
+            env.storage()
+                .persistent()
+                .extend_ttl(&key, TRIAL_TTL_THRESHOLD, TRIAL_TTL_EXTEND_TO);
+        }
+        list
     }
 
     /// Returns the deployed crate version (from Cargo.toml at build time).
