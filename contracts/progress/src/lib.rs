@@ -1130,5 +1130,12 @@ mod tests {
         assert_eq!(client.get_level(&999u64), ProgressLevel::Unverified);
     }
 
+    #[test]
+    fn test_get_history_count_returns_zero_when_no_progress() {
+        let (_, client, _) = setup();
+        assert_eq!(client.get_history_count(&999u64), 0);
+    }
+}
+
 
 }
