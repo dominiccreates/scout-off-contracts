@@ -29,6 +29,7 @@ fn default_fees() -> FeeConfig {
         pro_sub_stroops: 3_000_000,
         elite_sub_stroops: 7_000_000,
         sub_duration_secs: 30 * 24 * 60 * 60,
+        pro_contact_limit: 10,
     }
 }
 

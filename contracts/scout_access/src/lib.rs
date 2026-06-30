@@ -1,12 +1,13 @@
-#![cfg_attr(target_family = "wasm", no_std)]mod errors;
+#![cfg_attr(target_family = "wasm", no_std)]
+mod errors;
 mod events;
 mod types;
 
 use errors::ScoutAccessError;
-use types::{DataKey, Subscription, TrialOffer};
+use types::{ContactRecord, DataKey, Subscription, TrialOffer};
 pub use types::{FeeConfig, SubscriptionTier};
 
-use soroban_sdk::{contract, contractimpl, token, Address, Env, String};
+use soroban_sdk::{contract, contractimpl, token, Address, Env, String, Vec};
 
 use scoutchain_shared_types::{validate_cid, ContractHealth};
 
@@ -43,6 +44,7 @@ const INSTANCE_TTL_MAX: u32 = 500;
 // Persistent storage TTL bump for subscriptions / contact records.
 const PERSISTENT_TTL_MIN: u32 = 200;
 const PERSISTENT_TTL_MAX: u32 = 2_000;
+const ADMIN_BUMP_LEDGERS: u32 = 1000;
 
 // Admin key TTL — kept equal to PERSISTENT_TTL_MAX for simplicity.
 const ADMIN_BUMP_LEDGERS: u32 = 2_000;
@@ -82,12 +84,12 @@ impl ScoutAccessContract {
         xlm_token: Address,
         fee_config: FeeConfig,
     ) -> Result<(), ScoutAccessError> {
-        Self::bump_instance_ttl(&env);
         if env.storage().instance().has(&DataKey::Initialized) {
             return Err(ScoutAccessError::AlreadyInitialized);
         }
-        Self::validate_fee_config(&fee_config)?;
         admin.require_auth();
+        Self::validate_fee_config(&fee_config)?;
+        Self::bump_instance_ttl(&env);
         env.storage().persistent().set(&DataKey::Admin, &admin);
         env.storage().persistent().extend_ttl(&DataKey::Admin, ADMIN_BUMP_LEDGERS, ADMIN_BUMP_LEDGERS);
         env.storage().instance().set(&DataKey::XlmToken, &xlm_token);
@@ -107,9 +109,14 @@ impl ScoutAccessContract {
         Self::bump_instance_ttl(&env);
         Self::require_admin(&env)?;
         Self::validate_fee_config(&fee_config)?;
+        
+        let old_config = Self::fee_config(&env);
+        
         env.storage()
             .instance()
             .set(&DataKey::FeeConfig, &fee_config);
+        
+        events::fee_config_updated(&env, &old_config, &fee_config);
         Ok(())
     }
 
@@ -212,6 +219,12 @@ impl ScoutAccessContract {
     /// 3. Write `Subscription` record to persistent storage.
     ///
     /// Scout must pre-approve the XLM transfer. Downgrades before expiry are rejected.
+    ///
+    /// Emits `subscription_created` for a brand-new subscription or
+    /// `subscription_renewed` when an existing (possibly active) subscription
+    /// is replaced. Both events include scout address, tier, subscribed_at, and
+    /// expires_at so off-chain indexers can reconstruct the full subscription
+    /// history from events alone (closes #462).
     pub fn subscribe(
         env: Env,
         scout: Address,
@@ -224,11 +237,17 @@ impl ScoutAccessContract {
 
         let now = env.ledger().timestamp();
 
+        // Track whether this is a renewal/upgrade of an existing subscription.
+        let is_renewal = env
+            .storage()
+            .persistent()
+            .has(&DataKey::Subscription(scout.clone()));
+
         // Downgrade guard: if an active subscription exists, only allow same
         // tier or an upgrade. Downgrades before expiry are rejected.
         // Also enforce a minimum interval between subscribe calls to prevent
         // race conditions / double-charging on rapid upgrades.
-        let old_tier = if let Some(existing) = env
+        if let Some(existing) = env
             .storage()
             .persistent()
             .get::<DataKey, Subscription>(&DataKey::Subscription(scout.clone()))
@@ -245,10 +264,7 @@ impl ScoutAccessContract {
                     return Err(ScoutAccessError::UpgradeTooSoon);
                 }
             }
-            Some(existing.tier)
-        } else {
-            None
-        };
+        }
 
         let config = Self::fee_config(&env);
         let fee = match &tier {
@@ -259,14 +275,25 @@ impl ScoutAccessContract {
 
         Self::collect_fee(&env, &scout, fee)?;
 
+        let expires_at = now
+            .checked_add(config.sub_duration_secs)
+            .ok_or(ScoutAccessError::Overflow)?;
+
         let sub = Subscription {
             scout: scout.clone(),
             tier: tier.clone(),
-            expires_at: now
-                .checked_add(config.sub_duration_secs)
-                .ok_or(ScoutAccessError::Overflow)?,
+            expires_at,
             subscribed_at: now,
         };
+
+        // Remove scout from old tier index if upgrading
+        if let Some(existing) = env
+            .storage()
+            .persistent()
+            .get::<DataKey, Subscription>(&DataKey::Subscription(scout.clone()))
+        {
+            Self::remove_from_tier_index(&env, &scout, &existing.tier);
+        }
 
         env.storage()
             .persistent()
@@ -277,14 +304,15 @@ impl ScoutAccessContract {
             PERSISTENT_TTL_MAX,
         );
 
-        // Update tier index: remove from old tier, add to new tier
-        if let Some(old) = old_tier {
-            if old != tier {
-                Self::subscribers_index_remove(&env, &old, &scout);
-            }
+        // Emit a rich auditable event (closes #462).
+        // subscription_renewed covers same-tier renewals and tier upgrades;
+        // subscription_created covers a scout's very first subscription.
+        if is_renewal {
+            events::subscription_renewed(&env, &scout, &tier, now, expires_at);
+        } else {
+            events::subscription_created(&env, &scout, &tier, now, expires_at);
         }
-        Self::subscribers_index_add(&env, &tier, &scout);
-
+        // Keep the legacy scout_subscribed event for backward compatibility.
         events::scout_subscribed(&env, &scout, &tier, fee);
         Ok(())
     }
@@ -392,7 +420,16 @@ impl ScoutAccessContract {
         Self::require_not_paused(&env)?;
         Self::require_initialized(&env)?;
         scout.require_auth();
-        Self::require_active_subscription(&env, &scout)?;
+
+        let subscription: Subscription = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Subscription(scout.clone()))
+            .ok_or(ScoutAccessError::ScoutNotSubscribed)?;
+        if subscription.expires_at < env.ledger().timestamp() {
+            return Err(ScoutAccessError::SubscriptionExpired);
+        }
+
         Self::check_pro_contact_quota(&env, &scout)?;
 
         let contact_key = DataKey::ContactRecord(player_id, scout.clone());
@@ -401,10 +438,51 @@ impl ScoutAccessContract {
         }
 
         let config = Self::fee_config(&env);
+
+        // Pro-tier quota enforcement: limit contacts to pro_contact_limit per
+        // subscription period.  The counter resets automatically on renewal
+        // because a new period_start is stored when the scout subscribes again.
+        if sub.tier == SubscriptionTier::Pro {
+            let period_key = DataKey::ProContactCount(scout.clone());
+            let period: ProContactPeriod = env
+                .storage()
+                .persistent()
+                .get(&period_key)
+                .unwrap_or(ProContactPeriod {
+                    period_start: sub.subscribed_at,
+                    count: 0,
+                });
+            // If the stored period_start predates the current subscription,
+            // treat the counter as zero (subscription was renewed).
+            let current_count = if period.period_start == sub.subscribed_at {
+                period.count
+            } else {
+                0u32
+            };
+            if current_count >= config.pro_contact_limit {
+                return Err(ScoutAccessError::ProContactLimitReached);
+            }
+            let new_period = ProContactPeriod {
+                period_start: sub.subscribed_at,
+                count: current_count.checked_add(1).ok_or(ScoutAccessError::Overflow)?,
+            };
+            env.storage().persistent().set(&period_key, &new_period);
+            env.storage().persistent().extend_ttl(
+                &period_key,
+                PERSISTENT_TTL_MIN,
+                PERSISTENT_TTL_MAX,
+            );
+        }
+
         Self::collect_fee(&env, &scout, config.contact_fee_stroops)?;
         Self::increment_contact_count(&env, &scout);
 
-        env.storage().persistent().set(&contact_key, &true);
+        let record = ContactRecord {
+            player_id,
+            scout: scout.clone(),
+            contacted_at: env.ledger().timestamp(),
+        };
+        env.storage().persistent().set(&contact_key, &record);
         env.storage()
             .persistent()
             .extend_ttl(&contact_key, PERSISTENT_TTL_MIN, PERSISTENT_TTL_MAX);
@@ -429,6 +507,25 @@ impl ScoutAccessContract {
             .persistent()
             .extend_ttl(&index_key, PERSISTENT_TTL_MIN, PERSISTENT_TTL_MAX);
 
+        // Update player-centric inbound contact index so a player can list
+        // all scouts who have contacted them directly from on-chain state
+        // without replaying off-chain events.
+        let player_index_key = DataKey::PlayerContacts(player_id);
+        let mut inbound: soroban_sdk::Vec<Address> = env
+            .storage()
+            .persistent()
+            .get(&player_index_key)
+            .unwrap_or_else(|| soroban_sdk::Vec::new(&env));
+        if !inbound.contains(&scout) {
+            inbound.push_back(scout.clone());
+        }
+        env.storage()
+            .persistent()
+            .set(&player_index_key, &inbound);
+        env.storage()
+            .persistent()
+            .extend_ttl(&player_index_key, PERSISTENT_TTL_MIN, PERSISTENT_TTL_MAX);
+
         events::player_contacted(&env, player_id, &scout, config.contact_fee_stroops);
         Ok(())
     }
@@ -444,13 +541,13 @@ impl ScoutAccessContract {
     pub fn batch_contact_players(
         env: Env,
         scout: Address,
-        player_ids: Vec<u64>,
+        player_ids: soroban_sdk::Vec<u64>,
     ) -> Result<u32, ScoutAccessError> {
         Self::bump_instance_ttl(&env);
         Self::require_not_paused(&env)?;
         Self::require_initialized(&env)?;
         scout.require_auth();
-        Self::require_active_subscription(&env, &scout)?;
+        let sub = Self::require_active_subscription(&env, &scout)?;
 
         let config = Self::fee_config(&env);
         let mut new_contacts: u32 = 0;
@@ -490,12 +587,56 @@ impl ScoutAccessContract {
             if env.storage().persistent().has(&contact_key) {
                 continue;
             }
-            env.storage().persistent().set(&contact_key, &true);
+            let record = ContactRecord {
+                player_id,
+                scout: scout.clone(),
+                contacted_at: env.ledger().timestamp(),
+            };
+            env.storage().persistent().set(&contact_key, &record);
             env.storage().persistent().extend_ttl(
                 &contact_key,
                 PERSISTENT_TTL_MIN,
                 PERSISTENT_TTL_MAX,
             );
+
+            // Update scout-centric outbound index
+            let scout_index_key = DataKey::ScoutContacts(scout.clone());
+            let mut scout_contacted: soroban_sdk::Vec<u64> = env
+                .storage()
+                .persistent()
+                .get(&scout_index_key)
+                .unwrap_or_else(|| soroban_sdk::Vec::new(&env));
+            if !scout_contacted.contains(&player_id) {
+                scout_contacted.push_back(player_id);
+            }
+            env.storage()
+                .persistent()
+                .set(&scout_index_key, &scout_contacted);
+            env.storage().persistent().extend_ttl(
+                &scout_index_key,
+                PERSISTENT_TTL_MIN,
+                PERSISTENT_TTL_MAX,
+            );
+
+            // Update player-centric inbound index
+            let player_index_key = DataKey::PlayerContacts(player_id);
+            let mut inbound: soroban_sdk::Vec<Address> = env
+                .storage()
+                .persistent()
+                .get(&player_index_key)
+                .unwrap_or_else(|| soroban_sdk::Vec::new(&env));
+            if !inbound.contains(&scout) {
+                inbound.push_back(scout.clone());
+            }
+            env.storage()
+                .persistent()
+                .set(&player_index_key, &inbound);
+            env.storage().persistent().extend_ttl(
+                &player_index_key,
+                PERSISTENT_TTL_MIN,
+                PERSISTENT_TTL_MAX,
+            );
+
             events::player_contacted(&env, player_id, &scout, config.contact_fee_stroops);
         }
 
@@ -591,6 +732,24 @@ impl ScoutAccessContract {
             TRIAL_TTL_EXTEND_TO,
         );
 
+        // #468: Update per-scout trial offer index so scouts can enumerate all
+        // trial offers they have logged without an off-chain event index.
+        let scout_index_key = DataKey::ScoutTrialOffers(scout.clone());
+        let mut scout_offers: soroban_sdk::Vec<(u64, u32)> = env
+            .storage()
+            .persistent()
+            .get(&scout_index_key)
+            .unwrap_or_else(|| soroban_sdk::Vec::new(&env));
+        scout_offers.push_back((player_id, next_index));
+        env.storage()
+            .persistent()
+            .set(&scout_index_key, &scout_offers);
+        env.storage().persistent().extend_ttl(
+            &scout_index_key,
+            TRIAL_TTL_THRESHOLD,
+            TRIAL_TTL_EXTEND_TO,
+        );
+
         // Cross-contract call: advance the player to Level 3 if progress contract is set.
         if let Some(progress_addr) = env
             .storage()
@@ -655,26 +814,63 @@ impl ScoutAccessContract {
     ) -> soroban_sdk::Vec<Address> {
         env.storage()
             .persistent()
-            .get(&DataKey::SubscribersByTier(tier))
+            .get(&DataKey::TierSubscribers(tier))
             .unwrap_or_else(|| soroban_sdk::Vec::new(&env))
     }
 
     pub fn has_contacted(env: Env, scout: Address, player_id: u64) -> bool {
         Self::bump_instance_ttl(&env);
         let key = DataKey::ContactRecord(player_id, scout);
-        let exists = env.storage().persistent().has(&key);
-        if exists {
+        let record: Option<ContactRecord> = env.storage().persistent().get(&key);
+        if record.is_some() {
             env.storage()
                 .persistent()
                 .extend_ttl(&key, PERSISTENT_TTL_MIN, PERSISTENT_TTL_MAX);
         }
-        exists
+        record.is_some()
+    }
+
+    /// Retrieve the full ContactRecord for a (player_id, scout) pair.
+    /// Returns None if the scout has not contacted this player.
+    pub fn get_contact_record(
+        env: Env,
+        scout: Address,
+        player_id: u64,
+    ) -> Option<ContactRecord> {
+        Self::bump_instance_ttl(&env);
+        let key = DataKey::ContactRecord(player_id, scout);
+        let record: Option<ContactRecord> = env.storage().persistent().get(&key);
+        if record.is_some() {
+            env.storage()
+                .persistent()
+                .extend_ttl(&key, PERSISTENT_TTL_MIN, PERSISTENT_TTL_MAX);
+        }
+        record
     }
 
     /// Return all player_ids contacted by `scout` as an O(1) index lookup.
     pub fn get_scout_contacts(env: Env, scout: Address) -> soroban_sdk::Vec<u64> {
         Self::bump_instance_ttl(&env);
         let key = DataKey::ScoutContacts(scout.clone());
+        let list = env
+            .storage()
+            .persistent()
+            .get(&key)
+            .unwrap_or_else(|| soroban_sdk::Vec::new(&env));
+        if !list.is_empty() {
+            env.storage()
+                .persistent()
+                .extend_ttl(&key, PERSISTENT_TTL_MIN, PERSISTENT_TTL_MAX);
+        }
+        list
+    }
+
+    /// Return all scout addresses that have contacted `player_id` as an O(1)
+    /// index lookup.  Players can audit their inbound contact history directly
+    /// from on-chain state without replaying off-chain events.
+    pub fn get_player_contacts(env: Env, player_id: u64) -> soroban_sdk::Vec<Address> {
+        Self::bump_instance_ttl(&env);
+        let key = DataKey::PlayerContacts(player_id);
         let list = env
             .storage()
             .persistent()
@@ -789,6 +985,31 @@ impl ScoutAccessContract {
         }
     }
 
+    /// Returns all (player_id, trial_index) tuples for every trial offer logged
+    /// by `scout`. The returned Vec is in insertion order (oldest first).
+    ///
+    /// Returns an empty Vec for a scout who has not logged any trial offers.
+    /// Each tuple can be passed to `get_trial_offer(player_id, index)` to fetch
+    /// the full offer record (closes #468).
+    pub fn get_scout_trial_offers(
+        env: Env,
+        scout: Address,
+    ) -> soroban_sdk::Vec<(u64, u32)> {
+        Self::bump_instance_ttl(&env);
+        let key = DataKey::ScoutTrialOffers(scout.clone());
+        let list = env
+            .storage()
+            .persistent()
+            .get(&key)
+            .unwrap_or_else(|| soroban_sdk::Vec::new(&env));
+        if !list.is_empty() {
+            env.storage()
+                .persistent()
+                .extend_ttl(&key, TRIAL_TTL_THRESHOLD, TRIAL_TTL_EXTEND_TO);
+        }
+        list
+    }
+
     /// Returns the deployed crate version (from Cargo.toml at build time).
     pub fn version(env: Env) -> String {
         String::from_str(&env, CONTRACT_VERSION)
@@ -797,6 +1018,40 @@ impl ScoutAccessContract {
     // -------------------------------------------------------------------------
     // Internal helpers
     // -------------------------------------------------------------------------
+
+    fn add_to_tier_index(env: &Env, scout: &Address, tier: &SubscriptionTier) {
+        let key = DataKey::TierSubscribers(tier.clone());
+        let mut subscribers: Vec<Address> = env
+            .storage()
+            .persistent()
+            .get(&key)
+            .unwrap_or_else(|| Vec::new(env));
+        if !subscribers.contains(scout) {
+            subscribers.push_back(scout.clone());
+        }
+        env.storage().persistent().set(&key, &subscribers);
+        env.storage()
+            .persistent()
+            .extend_ttl(&key, PERSISTENT_TTL_MIN, PERSISTENT_TTL_MAX);
+    }
+
+    fn remove_from_tier_index(env: &Env, scout: &Address, tier: &SubscriptionTier) {
+        let key = DataKey::TierSubscribers(tier.clone());
+        if let Some(subscribers) = env
+            .storage()
+            .persistent()
+            .get::<DataKey, Vec<Address>>(&key)
+        {
+            let mut new_list: Vec<Address> = Vec::new(env);
+            for i in 0..subscribers.len() {
+                let addr = subscribers.get(i).unwrap();
+                if &addr != scout {
+                    new_list.push_back(addr);
+                }
+            }
+            env.storage().persistent().set(&key, &new_list);
+        }
+    }
 
     fn require_admin(env: &Env) -> Result<(), ScoutAccessError> {
     let admin: Address = env
@@ -907,6 +1162,7 @@ impl ScoutAccessContract {
             || config.pro_sub_stroops <= 0
             || config.elite_sub_stroops <= 0
             || config.sub_duration_secs == 0
+            || config.pro_contact_limit == 0
         {
             return Err(ScoutAccessError::InvalidInput);
         }
@@ -922,31 +1178,6 @@ impl ScoutAccessContract {
         }
     }
 
-    fn subscribers_index_add(env: &Env, tier: &SubscriptionTier, scout: &Address) {
-        let key = DataKey::SubscribersByTier(tier.clone());
-        let mut list: soroban_sdk::Vec<Address> = env
-            .storage()
-            .persistent()
-            .get(&key)
-            .unwrap_or_else(|| soroban_sdk::Vec::new(env));
-        if !list.contains(scout.clone()) {
-            list.push_back(scout.clone());
-            env.storage().persistent().set(&key, &list);
-        }
-    }
-
-    fn subscribers_index_remove(env: &Env, tier: &SubscriptionTier, scout: &Address) {
-        let key = DataKey::SubscribersByTier(tier.clone());
-        let mut list: soroban_sdk::Vec<Address> = env
-            .storage()
-            .persistent()
-            .get(&key)
-            .unwrap_or_else(|| soroban_sdk::Vec::new(env));
-        if let Some(pos) = list.iter().position(|a| a == scout.clone()) {
-            list.remove(pos as u32);
-            env.storage().persistent().set(&key, &list);
-        }
-    }
 }
 
 // =============================================================================
@@ -954,7 +1185,7 @@ impl ScoutAccessContract {
 mod tests {
     use super::*;
     use soroban_sdk::{
-        testutils::{Address as _, Events, Ledger, MockAuth, MockAuthInvoke},
+        testutils::{storage::Instance, Address as _, Events, Ledger, MockAuth, MockAuthInvoke},
         token::{Client as TokenClient, StellarAssetClient},
         Env, IntoVal, String, Symbol,
     };
@@ -975,6 +1206,7 @@ mod tests {
             pro_sub_stroops: 3_000_000,
             elite_sub_stroops: 7_000_000,
             sub_duration_secs: 30 * 24 * 60 * 60,
+            pro_contact_limit: 10,
         }
     }
 
@@ -1035,14 +1267,16 @@ mod tests {
 
     #[test]
     fn test_fee_config_updated_event_contains_old_and_new_config() {
-        let (env, _admin, _xlm, _contract_id, client) = setup();
+        let (env, _admin, _xlm, contract_id, client) = setup();
 
+        let old_config = default_fees();
         let new_fees = FeeConfig {
             contact_fee_stroops: 200_000,
             basic_sub_stroops: 2_000_000,
             pro_sub_stroops: 5_000_000,
             elite_sub_stroops: 10_000_000,
             sub_duration_secs: 60 * 24 * 60 * 60,
+            pro_contact_limit: 20,
         };
 
         client.update_fee_config(&new_fees);
@@ -1050,6 +1284,25 @@ mod tests {
         // Storage must reflect the new config.
         let stored = client.get_fee_config();
         assert_eq!(stored.contact_fee_stroops, new_fees.contact_fee_stroops);
+        assert_eq!(stored.pro_contact_limit, new_fees.pro_contact_limit);
+
+        // Assert that the fee_config_updated event was emitted with old and new config
+        let events = env.events().all().filter_by_contract(&contract_id);
+        assert_eq!(events.len(), 1);
+        
+        let event = events.get(0).unwrap();
+        assert_eq!(
+            event.0,
+            contract_id
+        );
+        assert_eq!(
+            event.1,
+            (Symbol::new(&env, "fee_config_updated"),).into_val(&env)
+        );
+        assert_eq!(
+            event.2,
+            (old_config, new_fees).into_val(&env)
+        );
     }
 
     #[test]
@@ -1094,16 +1347,26 @@ mod tests {
 
         client.subscribe(&scout, &SubscriptionTier::Basic);
 
+        let sub = client.get_subscription(&scout);
+        // Both legacy and new events must be emitted.
+        let emitted = env.events().all().filter_by_contract(&contract_id);
+        // subscription_created first, then legacy scout_subscribed
+        assert_eq!(emitted.len(), 2);
         assert_eq!(
-            env.events().all().filter_by_contract(&contract_id),
-            soroban_sdk::vec![
-                &env,
-                (
-                    contract_id.clone(),
-                    (Symbol::new(&env, "scout_subscribed"), scout.clone()).into_val(&env),
-                    (SubscriptionTier::Basic, default_fees().basic_sub_stroops).into_val(&env)
-                )
-            ]
+            emitted.get(0).unwrap(),
+            (
+                contract_id.clone(),
+                (Symbol::new(&env, "subscription_created"), scout.clone()).into_val(&env),
+                (SubscriptionTier::Basic, sub.subscribed_at, sub.expires_at).into_val(&env)
+            )
+        );
+        assert_eq!(
+            emitted.get(1).unwrap(),
+            (
+                contract_id.clone(),
+                (Symbol::new(&env, "scout_subscribed"), scout.clone()).into_val(&env),
+                (SubscriptionTier::Basic, default_fees().basic_sub_stroops).into_val(&env)
+            )
         );
     }
 
@@ -1115,16 +1378,24 @@ mod tests {
 
         client.subscribe(&scout, &SubscriptionTier::Pro);
 
+        let sub = client.get_subscription(&scout);
+        let emitted = env.events().all().filter_by_contract(&contract_id);
+        assert_eq!(emitted.len(), 2);
         assert_eq!(
-            env.events().all().filter_by_contract(&contract_id),
-            soroban_sdk::vec![
-                &env,
-                (
-                    contract_id.clone(),
-                    (Symbol::new(&env, "scout_subscribed"), scout.clone()).into_val(&env),
-                    (SubscriptionTier::Pro, default_fees().pro_sub_stroops).into_val(&env)
-                )
-            ]
+            emitted.get(0).unwrap(),
+            (
+                contract_id.clone(),
+                (Symbol::new(&env, "subscription_created"), scout.clone()).into_val(&env),
+                (SubscriptionTier::Pro, sub.subscribed_at, sub.expires_at).into_val(&env)
+            )
+        );
+        assert_eq!(
+            emitted.get(1).unwrap(),
+            (
+                contract_id.clone(),
+                (Symbol::new(&env, "scout_subscribed"), scout.clone()).into_val(&env),
+                (SubscriptionTier::Pro, default_fees().pro_sub_stroops).into_val(&env)
+            )
         );
     }
 
@@ -1140,6 +1411,51 @@ mod tests {
         assert!(client.has_contacted(&scout, &1u64));
         // elite fee + contact fee
         assert_eq!(client.get_accumulated_fees(), 7_000_000 + 100_000);
+    }
+
+    /// Issue #422 — contact_player stores a ContactRecord but no test reads back
+    /// all fields and asserts correctness. This test calls pay_to_contact, then
+    /// retrieves the stored ContactRecord via get_contact_record and asserts that
+    /// player_id, scout address, and contacted_at all match the expected values.
+    #[test]
+    fn test_contact_record_fields_stored_correctly() {
+        let (env, admin, xlm, _contract_id, client) = setup();
+        let scout = Address::generate(&env);
+        let player_id: u64 = 77;
+
+        // Pin the ledger timestamp so we can assert contacted_at precisely.
+        env.ledger().with_mut(|l| l.timestamp = 1_500_000);
+
+        mint_token(&env, &xlm, &admin, &scout, 100_000_000);
+        client.subscribe(&scout, &SubscriptionTier::Elite);
+
+        // Advance time slightly so the contact timestamp is distinct from
+        // the subscription timestamp, making the assertion unambiguous.
+        env.ledger().with_mut(|l| l.timestamp = 1_500_100);
+        let contact_time = env.ledger().timestamp();
+
+        client.pay_to_contact(&scout, &player_id);
+
+        // Retrieve and unwrap the stored record.
+        let record = client
+            .get_contact_record(&scout, &player_id)
+            .expect("ContactRecord should exist after pay_to_contact");
+
+        // All three fields must match exactly.
+        assert_eq!(record.player_id, player_id, "player_id mismatch");
+        assert_eq!(record.scout, scout, "scout address mismatch");
+        assert!(
+            record.contacted_at >= contact_time,
+            "contacted_at ({}) should be >= ledger timestamp at call time ({})",
+            record.contacted_at,
+            contact_time,
+        );
+
+        // has_contacted must still return true (regression guard).
+        assert!(client.has_contacted(&scout, &player_id));
+
+        // get_contact_record for an unknown pair must return None.
+        assert!(client.get_contact_record(&scout, &999u64).is_none());
     }
 
     #[test]
@@ -1175,6 +1491,199 @@ mod tests {
         client.pay_to_contact(&scout, &1u64);
         // second contact with same player should panic
         client.pay_to_contact(&scout, &1u64);
+    }
+
+    #[test]
+    fn test_player_contacts_index_updated_on_pay_to_contact() {
+        let (env, admin, xlm, _contract_id, client) = setup();
+        let scout1 = Address::generate(&env);
+        let scout2 = Address::generate(&env);
+        mint_token(&env, &xlm, &admin, &scout1, 100_000_000);
+        mint_token(&env, &xlm, &admin, &scout2, 100_000_000);
+
+        // Before any contact the inbound index is empty.
+        assert_eq!(client.get_player_contacts(&1u64).len(), 0);
+
+        // First scout contacts the player.
+        client.subscribe(&scout1, &SubscriptionTier::Pro);
+        client.pay_to_contact(&scout1, &1u64);
+
+        let contacts = client.get_player_contacts(&1u64);
+        assert_eq!(contacts.len(), 1);
+        assert_eq!(contacts.get(0).unwrap(), scout1);
+
+        // Second scout contacts the same player.
+        client.subscribe(&scout2, &SubscriptionTier::Pro);
+        client.pay_to_contact(&scout2, &1u64);
+
+        let contacts = client.get_player_contacts(&1u64);
+        assert_eq!(contacts.len(), 2);
+        assert!(contacts.contains(&scout1));
+        assert!(contacts.contains(&scout2));
+    }
+
+    #[test]
+    fn test_player_contacts_not_duplicated_on_repeated_contact_attempt() {
+        // The ContactRecord guard prevents a second pay_to_contact, so the
+        // inbound index should never grow beyond the set of unique scouts.
+        let (env, admin, xlm, _contract_id, client) = setup();
+        let scout = Address::generate(&env);
+        mint_token(&env, &xlm, &admin, &scout, 100_000_000);
+
+        client.subscribe(&scout, &SubscriptionTier::Pro);
+        client.pay_to_contact(&scout, &1u64);
+
+        // Trying a second time should fail (AlreadyContacted), so the index stays at 1.
+        let result = client.try_pay_to_contact(&scout, &1u64);
+        assert!(result.is_err());
+
+        assert_eq!(client.get_player_contacts(&1u64).len(), 1);
+    }
+
+    #[test]
+    fn test_player_contacts_independent_per_player() {
+        let (env, admin, xlm, _contract_id, client) = setup();
+        let scout = Address::generate(&env);
+        mint_token(&env, &xlm, &admin, &scout, 100_000_000);
+
+        client.subscribe(&scout, &SubscriptionTier::Elite);
+        // Scout contacts two different players.
+        client.pay_to_contact(&scout, &1u64);
+        client.pay_to_contact(&scout, &2u64);
+
+        // Each player's inbound index contains only this scout.
+        assert_eq!(client.get_player_contacts(&1u64).len(), 1);
+        assert_eq!(client.get_player_contacts(&2u64).len(), 1);
+        // Player 3 was never contacted.
+        assert_eq!(client.get_player_contacts(&3u64).len(), 0);
+    }
+
+    #[test]
+    fn test_pro_contact_limit_enforced() {
+        // Set pro_contact_limit to 3 so we can hit it cheaply in a test.
+        let env = Env::default();
+        env.mock_all_auths();
+        let admin = Address::generate(&env);
+        let xlm = create_token(&env, &admin);
+        let contract_id = env.register_contract(None, ScoutAccessContract);
+        let client = ScoutAccessContractClient::new(&env, &contract_id);
+        let fees = FeeConfig {
+            contact_fee_stroops: 100_000,
+            basic_sub_stroops: 1_000_000,
+            pro_sub_stroops: 3_000_000,
+            elite_sub_stroops: 7_000_000,
+            sub_duration_secs: 30 * 24 * 60 * 60,
+            pro_contact_limit: 3,
+        };
+        client.initialize(&admin, &xlm, &fees);
+
+        let scout = Address::generate(&env);
+        mint_token(&env, &xlm, &admin, &scout, 100_000_000);
+        client.subscribe(&scout, &SubscriptionTier::Pro);
+
+        // First 3 contacts succeed.
+        client.pay_to_contact(&scout, &1u64);
+        client.pay_to_contact(&scout, &2u64);
+        client.pay_to_contact(&scout, &3u64);
+
+        // Fourth contact must be rejected with ProContactLimitReached (#19).
+        let res = client.try_pay_to_contact(&scout, &4u64);
+        assert_eq!(res, Err(Ok(ScoutAccessError::ProContactLimitReached)));
+    }
+
+    #[test]
+    fn test_pro_contact_limit_not_applied_to_elite() {
+        // Elite scouts are unlimited — they must not hit the Pro quota.
+        let env = Env::default();
+        env.mock_all_auths();
+        let admin = Address::generate(&env);
+        let xlm = create_token(&env, &admin);
+        let contract_id = env.register_contract(None, ScoutAccessContract);
+        let client = ScoutAccessContractClient::new(&env, &contract_id);
+        let fees = FeeConfig {
+            contact_fee_stroops: 100_000,
+            basic_sub_stroops: 1_000_000,
+            pro_sub_stroops: 3_000_000,
+            elite_sub_stroops: 7_000_000,
+            sub_duration_secs: 30 * 24 * 60 * 60,
+            pro_contact_limit: 2, // very low cap — Elite must ignore this
+        };
+        client.initialize(&admin, &xlm, &fees);
+
+        let scout = Address::generate(&env);
+        mint_token(&env, &xlm, &admin, &scout, 100_000_000);
+        client.subscribe(&scout, &SubscriptionTier::Elite);
+
+        // Elite scout can contact more than pro_contact_limit players.
+        for player_id in 1u64..=5u64 {
+            client.pay_to_contact(&scout, &player_id);
+        }
+        assert_eq!(client.get_scout_contacts(&scout).len(), 5);
+    }
+
+    #[test]
+    fn test_pro_contact_limit_resets_on_renewal() {
+        // After a Pro scout renews, the contact counter must reset to 0.
+        let env = Env::default();
+        env.mock_all_auths();
+        let admin = Address::generate(&env);
+        let xlm = create_token(&env, &admin);
+        let contract_id = env.register_contract(None, ScoutAccessContract);
+        let client = ScoutAccessContractClient::new(&env, &contract_id);
+        let period_secs: u64 = 30 * 24 * 60 * 60;
+        let fees = FeeConfig {
+            contact_fee_stroops: 100_000,
+            basic_sub_stroops: 1_000_000,
+            pro_sub_stroops: 3_000_000,
+            elite_sub_stroops: 7_000_000,
+            sub_duration_secs: period_secs,
+            pro_contact_limit: 2,
+        };
+        client.initialize(&admin, &xlm, &fees);
+
+        let scout = Address::generate(&env);
+        mint_token(&env, &xlm, &admin, &scout, 200_000_000);
+        client.subscribe(&scout, &SubscriptionTier::Pro);
+
+        // Exhaust the limit in period 1.
+        client.pay_to_contact(&scout, &1u64);
+        client.pay_to_contact(&scout, &2u64);
+        assert!(client.try_pay_to_contact(&scout, &3u64).is_err());
+
+        // Advance ledger past subscription + MIN_UPGRADE_INTERVAL so renewal is allowed.
+        env.ledger().with_mut(|l| {
+            l.timestamp += period_secs + 3_601;
+        });
+
+        // Renew subscription.
+        client.subscribe(&scout, &SubscriptionTier::Pro);
+
+        // Counter should be reset — scout can contact new players again.
+        client.pay_to_contact(&scout, &3u64);
+        client.pay_to_contact(&scout, &4u64);
+        assert_eq!(client.try_pay_to_contact(&scout, &5u64),
+                   Err(Ok(ScoutAccessError::ProContactLimitReached)));
+    }
+
+    #[test]
+    fn test_validate_fee_config_rejects_zero_pro_contact_limit() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let admin = Address::generate(&env);
+        let xlm = create_token(&env, &admin);
+        let contract_id = env.register_contract(None, ScoutAccessContract);
+        let client = ScoutAccessContractClient::new(&env, &contract_id);
+
+        let bad_fees = FeeConfig {
+            contact_fee_stroops: 100_000,
+            basic_sub_stroops: 1_000_000,
+            pro_sub_stroops: 3_000_000,
+            elite_sub_stroops: 7_000_000,
+            sub_duration_secs: 30 * 24 * 60 * 60,
+            pro_contact_limit: 0, // invalid — must be > 0
+        };
+        let res = client.try_initialize(&admin, &xlm, &bad_fees);
+        assert_eq!(res, Err(Ok(ScoutAccessError::InvalidInput)));
     }
 
     #[test]
@@ -1275,6 +1784,40 @@ mod tests {
         assert_eq!(client.get_trial_count(&1u64), 1);
     }
 
+    /// Issue: a scout whose Elite subscription has expired must not be able to
+    /// log a trial offer. Verifies that `try_log_trial_offer` returns
+    /// `Err(Ok(ScoutAccessError::SubscriptionExpired))` once the ledger
+    /// timestamp is advanced past `expires_at`, and that no trial offer is
+    /// stored after the rejected call.
+    #[test]
+    fn test_log_trial_offer_rejected_after_subscription_expires() {
+        let (env, admin, xlm, _contract_id, client) = setup();
+        let scout = Address::generate(&env);
+
+        // Fund the scout and subscribe to Elite tier.
+        mint_token(&env, &xlm, &admin, &scout, 10_000_000);
+        client.subscribe(&scout, &SubscriptionTier::Elite);
+
+        // Confirm the subscription was recorded correctly.
+        let sub = client.get_subscription(&scout);
+        assert_eq!(sub.tier, SubscriptionTier::Elite);
+        assert!(sub.expires_at > sub.subscribed_at);
+
+        // Advance the ledger timestamp one second past the subscription expiry.
+        env.ledger().with_mut(|l| {
+            l.timestamp = sub.expires_at + 1;
+        });
+
+        // try_log_trial_offer must return SubscriptionExpired.
+        let player_id: u64 = 1;
+        let details_hash = String::from_str(&env, "QmPK1s3pNYLi9ERiq3BDxKa4XosgWwFRQUydHUtz4YgpqB");
+        let result = client.try_log_trial_offer(&scout, &player_id, &details_hash);
+        assert_eq!(result, Err(Ok(ScoutAccessError::SubscriptionExpired)));
+
+        // No trial offer must have been stored after the rejected call.
+        assert_eq!(client.get_trial_count(&player_id), 0);
+    }
+
     #[test]
     fn test_transfer_admin_success() {
         let (env, _admin, _xlm, _contract_id, client) = setup();
@@ -1317,6 +1860,8 @@ mod tests {
         let sub = client.get_subscription(&scout);
         assert_eq!(sub.tier, SubscriptionTier::Basic);
     }
+
+    #[test]
     fn test_pause_unpause_events() {
         let (env, admin, _, _, client) = setup();
 
@@ -1551,6 +2096,7 @@ mod tests {
             pro_sub_stroops: 5_000_000,
             elite_sub_stroops: 10_000_000,
             sub_duration_secs: 60 * 24 * 60 * 60,
+            pro_contact_limit: 15,
         };
         let result = client.try_update_fee_config(&new_fees);
         assert!(result.is_ok());
@@ -1737,6 +2283,76 @@ mod tests {
     // -------------------------------------------------------------------------
 
     #[test]
+    // -------------------------------------------------------------------------
+    // Fee accumulation tests across multiple subscriptions
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn test_accumulated_fees_sum_across_multiple_scout_subscriptions() {
+        let (env, admin, xlm, _contract_id, client) = setup();
+
+        // Create three scouts and mint tokens for each
+        let scout_basic = Address::generate(&env);
+        let scout_pro = Address::generate(&env);
+        let scout_elite = Address::generate(&env);
+
+        let fees = default_fees();
+        
+        mint_token(&env, &xlm, &admin, &scout_basic, 10_000_000);
+        mint_token(&env, &xlm, &admin, &scout_pro, 10_000_000);
+        mint_token(&env, &xlm, &admin, &scout_elite, 20_000_000);
+
+        // Subscribe each scout to a different tier
+        client.subscribe(&scout_basic, &SubscriptionTier::Basic);
+        client.subscribe(&scout_pro, &SubscriptionTier::Pro);
+        client.subscribe(&scout_elite, &SubscriptionTier::Elite);
+
+        // Verify accumulated fees equals sum of all three subscription fees
+        let expected_total = fees.basic_sub_stroops + fees.pro_sub_stroops + fees.elite_sub_stroops;
+        assert_eq!(client.get_accumulated_fees(), expected_total);
+
+        // Withdraw fees and verify the amount
+        let recipient = Address::generate(&env);
+        let withdrawn = client.withdraw_fees(&recipient);
+        assert_eq!(withdrawn, expected_total);
+
+        // Verify accumulated fees reset to 0
+        assert_eq!(client.get_accumulated_fees(), 0);
+
+        // Verify token balances are consistent
+        let token_client = TokenClient::new(&env, &xlm);
+        assert_eq!(token_client.balance(&recipient), expected_total);
+    }
+
+    // -------------------------------------------------------------------------
+    // pause_contract event tests
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn test_pause_contract_emits_contract_paused_event() {
+        let (env, admin, xlm, contract_id, client) = setup();
+
+        // Pause the contract
+        client.pause_contract();
+
+        // Verify the contract_paused event is emitted with correct topic and admin payload
+        let events = env.events().all();
+        assert_eq!(
+            events.filter_by_contract(&contract_id),
+            soroban_sdk::vec![
+                &env,
+                (
+                    contract_id.clone(),
+                    (Symbol::new(&env, "contract_paused"),).into_val(&env),
+                    admin.clone().into_val(&env)
+                )
+            ]
+        );
+
+        // Verify contract is actually paused
+        assert!(client.health().paused);
+    }
+
     fn test_refund_subscription_success() {
         let (env, admin, xlm, _contract_id, client) = setup();
         let scout = Address::generate(&env);
@@ -1754,18 +2370,13 @@ mod tests {
         let scout_balance_after = TokenClient::new(&env, &xlm).balance(&scout);
 
         assert_eq!(
-    contract_balance_before - refund_amount,
-    contract_balance_after
-);
-
-assert_eq!(
-    scout_balance_before + refund_amount,
-    scout_balance_after
-);
             contract_balance_before - refund_amount,
             contract_balance_after
         );
-        assert_eq!(scout_balance_before + refund_amount, scout_balance_after);
+        assert_eq!(
+            scout_balance_before + refund_amount,
+            scout_balance_after
+        );
     }
 
     #[test]
@@ -2084,5 +2695,101 @@ assert_eq!(
         );
         assert!(result.is_ok());
         assert_eq!(client.get_trial_count(&player_id), 1);
+    }
+
+    // -------------------------------------------------------------------------
+    // #462: subscription_created / subscription_renewed events
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn test_subscription_created_event_emitted_on_first_subscribe() {
+        let (env, admin, xlm, contract_id, client) = setup();
+        let scout = Address::generate(&env);
+        mint_token(&env, &xlm, &admin, &scout, 10_000_000);
+
+        client.subscribe(&scout, &SubscriptionTier::Elite);
+
+        let sub = client.get_subscription(&scout);
+        let emitted = env.events().all().filter_by_contract(&contract_id);
+        // subscription_created at index 0
+        assert_eq!(
+            emitted.get(0).unwrap(),
+            (
+                contract_id.clone(),
+                (Symbol::new(&env, "subscription_created"), scout.clone()).into_val(&env),
+                (SubscriptionTier::Elite, sub.subscribed_at, sub.expires_at).into_val(&env)
+            )
+        );
+        // Event includes scout, tier, and expiry (acceptance criteria #462)
+        assert_eq!(sub.tier, SubscriptionTier::Elite);
+        assert!(sub.expires_at > sub.subscribed_at);
+    }
+
+    #[test]
+    fn test_subscription_renewed_event_emitted_on_renewal() {
+        let (env, admin, xlm, contract_id, client) = setup();
+        let scout = Address::generate(&env);
+        mint_token(&env, &xlm, &admin, &scout, 100_000_000);
+
+        // First subscription
+        client.subscribe(&scout, &SubscriptionTier::Basic);
+
+        // Advance past the minimum upgrade interval and beyond expiry
+        env.ledger().with_mut(|l| {
+            l.timestamp += 31 * 24 * 60 * 60; // 31 days — subscription expired
+        });
+
+        // Renew
+        client.subscribe(&scout, &SubscriptionTier::Basic);
+
+        let sub = client.get_subscription(&scout);
+
+        // Find the subscription_renewed event among all emitted events
+        let emitted = env.events().all().filter_by_contract(&contract_id);
+        let renewed = emitted.iter().find(|(_, topics, _)| {
+            let topics_val: soroban_sdk::Vec<soroban_sdk::Val> =
+                soroban_sdk::Vec::from_array(&env, [*topics]);
+            topics_val
+                .to_string()
+                .contains("subscription_renewed")
+        });
+
+        // Check via topic matching: look for event with symbol "subscription_renewed"
+        let has_renewed = emitted.iter().any(|(_, topics, _)| {
+            topics == (Symbol::new(&env, "subscription_renewed"), scout.clone()).into_val(&env)
+        });
+        assert!(has_renewed, "subscription_renewed event must be emitted on renewal");
+
+        // Event payload must include correct tier and timestamps
+        let renewed_event = emitted.iter().find(|(_, topics, _)| {
+            topics == (Symbol::new(&env, "subscription_renewed"), scout.clone()).into_val(&env)
+        }).unwrap();
+        assert_eq!(
+            renewed_event.2,
+            (SubscriptionTier::Basic, sub.subscribed_at, sub.expires_at).into_val(&env)
+        );
+    }
+
+    #[test]
+    fn test_subscription_event_payload_includes_scout_tier_and_expiry() {
+        let (env, admin, xlm, contract_id, client) = setup();
+        let scout = Address::generate(&env);
+        mint_token(&env, &xlm, &admin, &scout, 10_000_000);
+
+        client.subscribe(&scout, &SubscriptionTier::Pro);
+
+        let sub = client.get_subscription(&scout);
+        let emitted = env.events().all().filter_by_contract(&contract_id);
+
+        // Verify the subscription_created event payload contains tier + timestamps
+        let created_event = emitted.iter().find(|(_, topics, _)| {
+            topics == (Symbol::new(&env, "subscription_created"), scout.clone()).into_val(&env)
+        });
+        assert!(created_event.is_some(), "subscription_created event must be present");
+        let payload = created_event.unwrap().2;
+        assert_eq!(
+            payload,
+            (SubscriptionTier::Pro, sub.subscribed_at, sub.expires_at).into_val(&env)
+        );
     }
 }

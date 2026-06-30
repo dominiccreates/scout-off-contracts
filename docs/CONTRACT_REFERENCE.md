@@ -14,6 +14,7 @@ Every `pub fn` in every `#[contractimpl]` block is documented here.
 - [Shared Types](#shared-types)
 - [Error Codes](#error-codes)
 - [Events](#events)
+- [Glossary](GLOSSARY.md)
 
 ---
 
@@ -1064,6 +1065,29 @@ Handles scout subscriptions, pay-to-contact flows, and trial offer logging.
 Fees are collected in XLM (stroops) and held in the contract until admin
 withdrawal.
 
+### `FeeConfig` Struct
+
+Primary configuration struct controlling all subscription and contact fees.
+Passed to `initialize` and `update_fee_config`. All fields must be strictly
+greater than zero; either function returns `InvalidInput` otherwise.
+
+| Field | Rust Type | Unit | Valid Range | Typical Example |
+|---|---|---|---|---|
+| `contact_fee_stroops` | `i128` | stroops (1 XLM = 10 000 000 stroops) | > 0 | `100000` (0.01 XLM) |
+| `basic_sub_stroops` | `i128` | stroops | > 0 | `1000000` (0.1 XLM) |
+| `pro_sub_stroops` | `i128` | stroops | > 0 | `3000000` (0.3 XLM) |
+| `elite_sub_stroops` | `i128` | stroops | > 0 | `7000000` (0.7 XLM) |
+| `sub_duration_secs` | `u64` | seconds | > 0 | `2592000` (30 days = 30 × 24 × 3600) |
+
+**Validation rules:**
+- Every `i128` fee field must be > 0 (zero or negative → `InvalidInput` error code 15).
+- `sub_duration_secs` must be > 0 (zero → `InvalidInput`).
+- There is no enforced upper bound, but values larger than the XLM supply
+  (≈ 500 000 000 XLM = 5 × 10¹⁵ stroops) will cause `Overflow` errors at fee
+  settlement time.
+
+See the [Glossary](GLOSSARY.md#feeconfig) for a plain-language description of each field.
+
 ### Functions
 
 ---
@@ -1489,17 +1513,42 @@ stellar contract invoke --id $SCOUT_ACCESS_CONTRACT_ID -- version
 
 ### `ProgressLevel`
 
-Four-tier progress level used by all contracts.
+Four-tier progress level used by all contracts. It is the core player ranking type
+referenced throughout registration, verification, progress, and scout_access.
 
-| Integer | Variant | Meaning |
-|---------|---------|---------|
-| 0 | `Unverified` | Profile created, no verifications yet |
-| 1 | `VerifiedIdentity` | Identity confirmed by a validator |
-| 2 | `PerformanceMilestones` | Performance stats verified by a validator |
-| 3 | `EliteTier` | Trial offer logged by an Elite scout |
+#### Variant table
 
-Valid transitions: 0 → 1 → 2 → 3 (sequential only; no skipping or reversing
-except via admin `reset_player_level`).
+| Ordinal | Variant | Semantic meaning |
+|---------|---------|-----------------|
+| 0 | `Unverified` | Profile created on-chain; no identity or performance verification has occurred yet. Default state for all newly registered players. |
+| 1 | `VerifiedIdentity` | Identity confirmed by an approved academy or KYC validator. Player is discoverable by scouts with a Basic subscription or higher. |
+| 2 | `PerformanceMilestones` | Performance statistics verified by an approved third-party validator. Player is discoverable by scouts with a Pro subscription or higher. |
+| 3 | `EliteTier` | Scout feedback or a trial offer has been logged by an Elite-tier scout. Player is discoverable by scouts with an Elite subscription only. |
+
+#### Subscription tier access mapping
+
+| ProgressLevel | Minimum subscription tier to view |
+|---------------|----------------------------------|
+| `Unverified` (0) | None — public profile metadata only (no contact) |
+| `VerifiedIdentity` (1) | Basic |
+| `PerformanceMilestones` (2) | Pro |
+| `EliteTier` (3) | Elite |
+
+Scouts without a sufficient tier can still see that a player exists but cannot view
+full profile details or initiate contact. Contact actions are separately gated by
+`scout_access.contact_player`.
+
+#### Valid transitions
+
+Levels advance sequentially: 0 → 1 → 2 → 3. No skipping or reversing is permitted
+except via the admin function `progress.reset_player_level`.
+
+Level promotion is triggered by `verification.approve_milestone`, which cross-calls
+[`progress.advance_level`](#advance_level-caller-address-player_id-u64-milestone_ref-u32---resultprogresslevel-progresserror).
+The new level is also reflected in `registration` queries, including
+[`registration.filter_players`](#filter_players-region-string-position-string-min_level-progresslevel---resultvecplayerprofile-scoutchainerror),
+which accepts a `min_level` argument to restrict results to players at or above a
+given tier.
 
 ### `ContractHealth`
 
