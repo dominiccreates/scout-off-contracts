@@ -15,6 +15,8 @@ const INSTANCE_TTL_MAX: u32 = 500;
 const PERSISTENT_TTL_MIN: u32 = 500;
 const PERSISTENT_TTL_MAX: u32 = 2000;
 
+const ADMIN_BUMP_LEDGERS: u32 = 2_000;
+
 const CONTRACT_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 // #457: Minimal client for the verification contract.
@@ -292,10 +294,17 @@ impl ProgressContract {
 
     pub fn get_history_count(env: Env, player_id: u64) -> u32 {
         Self::bump_instance_ttl(&env);
-        env.storage()
+        let count: u32 = env
+            .storage()
             .persistent()
             .get(&DataKey::HistoryCounter(player_id))
-            .unwrap_or(0u32)
+            .unwrap_or(0u32);
+        env.storage().persistent().extend_ttl(
+            &DataKey::HistoryCounter(player_id),
+            PERSISTENT_TTL_MIN,
+            PERSISTENT_TTL_MAX,
+        );
+        count
     }
 
     pub fn get_history_entry(

@@ -381,7 +381,16 @@ impl ScoutAccessContract {
         Self::require_not_paused(&env)?;
         Self::require_initialized(&env)?;
         scout.require_auth();
-        Self::require_active_subscription(&env, &scout)?;
+
+        let subscription: Subscription = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Subscription(scout.clone()))
+            .ok_or(ScoutAccessError::ScoutNotSubscribed)?;
+        if subscription.expires_at < env.ledger().timestamp() {
+            return Err(ScoutAccessError::SubscriptionExpired);
+        }
+
         Self::check_pro_contact_quota(&env, &scout)?;
 
         let contact_key = DataKey::ContactRecord(player_id, scout.clone());

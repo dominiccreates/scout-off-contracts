@@ -290,6 +290,9 @@ impl RegistrationContract {
             .set(&DataKey::Scout(scout_id), &profile);
         env.storage()
             .persistent()
+            .extend_ttl(&DataKey::Scout(scout_id), PERSISTENT_TTL_MIN, PERSISTENT_TTL_MAX);
+        env.storage()
+            .persistent()
             .set(&DataKey::ScoutByWallet(wallet.clone()), &scout_id);
 
         events::scout_registered(&env, scout_id, &wallet);
