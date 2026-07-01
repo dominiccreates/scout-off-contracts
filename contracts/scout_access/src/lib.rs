@@ -808,6 +808,16 @@ impl ScoutAccessContract {
             .unwrap_or(0i128)
     }
 
+    pub fn get_subscribers_by_tier(
+        env: Env,
+        tier: SubscriptionTier,
+    ) -> soroban_sdk::Vec<Address> {
+        env.storage()
+            .persistent()
+            .get(&DataKey::TierSubscribers(tier))
+            .unwrap_or_else(|| soroban_sdk::Vec::new(&env))
+    }
+
     pub fn has_contacted(env: Env, scout: Address, player_id: u64) -> bool {
         Self::bump_instance_ttl(&env);
         let key = DataKey::ContactRecord(player_id, scout);
@@ -1167,6 +1177,7 @@ impl ScoutAccessContract {
             SubscriptionTier::Elite => 3,
         }
     }
+
 }
 
 // =============================================================================

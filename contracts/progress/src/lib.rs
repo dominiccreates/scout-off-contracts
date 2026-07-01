@@ -16,8 +16,6 @@ const PERSISTENT_TTL_MIN: u32 = 500;
 const PERSISTENT_TTL_MAX: u32 = 2000;
 const ADMIN_BUMP_LEDGERS: u32 = 1000;
 
-const ADMIN_BUMP_LEDGERS: u32 = 2_000;
-
 const CONTRACT_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 // #457: Minimal client for the verification contract.
@@ -73,6 +71,15 @@ impl ProgressContract {
         env.storage().persistent().extend_ttl(&DataKey::Admin, ADMIN_BUMP_LEDGERS, ADMIN_BUMP_LEDGERS);
         env.storage().instance().set(&DataKey::Initialized, &true);
         env.storage().instance().set(&DataKey::Paused, &false);
+        Ok(())
+    }
+
+    /// Store the registration contract address so we can sync player levels (admin only).
+    pub fn set_registration_contract(env: Env, addr: Address) -> Result<(), ProgressError> {
+        Self::require_admin(&env)?;
+        env.storage()
+            .instance()
+            .set(&DataKey::RegistrationContract, &addr);
         Ok(())
     }
 

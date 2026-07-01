@@ -1395,9 +1395,7 @@ fn test_upgrade_preserves_admin() {
         client.get_player(&player_id).player_id,
         player_id
     );
-}        
-    client.register_player(&wallet, &vitals, &hashes);
-    }
+}
 
     #[test]
     #[should_panic]
@@ -1431,24 +1429,6 @@ fn test_upgrade_preserves_admin() {
         // Admin persisted — admin-gated call still works
         client.pause_contract();
         assert_eq!(client.get_player(&player_id).player_id, player_id);
-    }
-}
-        let wallet = Address::generate(&env);
-        let vitals = dummy_vitals(&env);
-        let hashes = vec![&env, String::from_str(&env, "QmTest")];
-        let region = String::from_str(&env, "Europe");
-
-        let player_id = client.register_player(&wallet, &vitals, &hashes);
-        assert_eq!(player_id, 1);
-
-        let scout_id = client.register_scout(&wallet, &region);
-        assert_eq!(scout_id, 1);
-
-        let player = client.get_player(&player_id);
-        assert_eq!(player.wallet, wallet);
-
-        let scout = client.get_scout(&scout_id);
-        assert_eq!(scout.wallet, wallet);
     }
 
     // -------------------------------------------------------------------------

@@ -91,4 +91,8 @@ pub enum DataKey {
     /// Updated on every `approve_milestone` call (duplicates are skipped).
     ValidatorPlayers(Address),
     MilestoneDispute(u64, u32),
+    ActiveValidatorCount,
+    /// Evidence hash → bool for global uniqueness check.
+    EvidenceUsed(String),
+    ValidatorMilestones(Address),
 }
