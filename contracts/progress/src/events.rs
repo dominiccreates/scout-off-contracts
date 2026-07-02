@@ -2,6 +2,10 @@
 use scoutchain_shared_types::ProgressLevel;
 use soroban_sdk::{Address, Env, Symbol};
 
+pub const ADMIN_TRANSFERRED: &str = "admin_transferred";
+pub const PROGRESS_UPDATED: &str = "progress_updated";
+pub const PLAYER_LEVEL_RESET: &str = "player_level_reset";
+
 pub fn admin_transferred(env: &Env, old_admin: &Address, new_admin: &Address) {
     env.events().publish(
         (Symbol::new(env, "admin_transferred"),),

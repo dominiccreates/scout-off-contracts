@@ -1260,7 +1260,7 @@ mod tests {
                 &env,
                 (
                     contract_id.clone(),
-                    (Symbol::new(&env, "contract_initialized"), admin.clone()).into_val(&env),
+                    (Symbol::new(&env, crate::events::CONTRACT_INITIALIZED), admin.clone()).into_val(&env),
                     admin.clone().into_val(&env)
                 )
             ]
@@ -1489,7 +1489,7 @@ mod tests {
                 &env,
                 (
                     contract_id.clone(),
-                    (Symbol::new(&env, "player_contacted"), scout.clone()).into_val(&env),
+                    (Symbol::new(&env, crate::events::PLAYER_CONTACTED), scout.clone()).into_val(&env),
                     (42u64, default_fees().contact_fee_stroops).into_val(&env)
                 )
             ]
@@ -1893,7 +1893,7 @@ mod tests {
                 &env,
                 (
                     client.address.clone(),
-                    (Symbol::new(&env, "contract_paused"),).into_val(&env),
+                    (Symbol::new(&env, crate::events::CONTRACT_PAUSED),).into_val(&env),
                     admin.clone().into_val(&env)
                 )
             ]
@@ -1907,7 +1907,7 @@ mod tests {
                 &env,
                 (
                     client.address.clone(),
-                    (Symbol::new(&env, "contract_unpaused"),).into_val(&env),
+                    (Symbol::new(&env, crate::events::CONTRACT_UNPAUSED),).into_val(&env),
                     admin.clone().into_val(&env)
                 )
             ]
@@ -2455,7 +2455,7 @@ mod tests {
                 &env,
                 (
                     contract_id.clone(),
-                    (Symbol::new(&env, "progress_contract_updated"),).into_val(&env),
+                    (Symbol::new(&env, crate::events::PROGRESS_CONTRACT_UPDATED),).into_val(&env),
                     progress_addr.clone().into_val(&env),
                 )
             ]

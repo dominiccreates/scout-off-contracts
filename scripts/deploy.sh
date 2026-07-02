@@ -74,6 +74,31 @@ done
   echo "SCOUT_ACCESS_CONTRACT_WASM_HASH=${CONTRACT_WASM_HASHES[scout_access]}"
 } > .env.contracts
 
+# Write the same data as JSON for downstream tooling.
+cat > .env.contracts.json <<EOF
+{
+  "network": "${NETWORK}",
+  "contracts": {
+    "registration": {
+      "id": "${CONTRACT_IDS[registration]}",
+      "wasm_hash": "${CONTRACT_WASM_HASHES[registration]}"
+    },
+    "verification": {
+      "id": "${CONTRACT_IDS[verification]}",
+      "wasm_hash": "${CONTRACT_WASM_HASHES[verification]}"
+    },
+    "progress": {
+      "id": "${CONTRACT_IDS[progress]}",
+      "wasm_hash": "${CONTRACT_WASM_HASHES[progress]}"
+    },
+    "scout_access": {
+      "id": "${CONTRACT_IDS[scout_access]}",
+      "wasm_hash": "${CONTRACT_WASM_HASHES[scout_access]}"
+    }
+  }
+}
+EOF
+
 echo ""
 echo "==> All contracts deployed. IDs saved to .env.contracts"
 echo "    Pre-deploy snapshot is at .env.contracts.snapshot"
