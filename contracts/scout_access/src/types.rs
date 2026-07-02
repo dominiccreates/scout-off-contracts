@@ -103,4 +103,10 @@ pub enum DataKey {
     TrialOfferLastSent(Address, u64),
     /// tier → Vec<Address> of scouts subscribed at this tier
     TierSubscribers(SubscriptionTier),
+    /// Pro-tier contact period counter: scout → ProContactPeriod
+    ProContactCount(Address),
+    /// player_id → Vec<Address> of scouts who have contacted this player
+    PlayerContacts(u64),
+    /// scout → Vec<(player_id, trial_index)> of all trial offers sent
+    ScoutTrialOffers(Address),
 }

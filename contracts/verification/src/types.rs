@@ -1,16 +1,6 @@
 pub use scoutchain_shared_types::ContractHealth;
 use soroban_sdk::{contracttype, Address, String, Vec};
 
-/// A player's dispute of a milestone approval (issue #471).
-#[contracttype]
-#[derive(Clone, Debug)]
-pub struct MilestoneDispute {
-    pub player_id: u64,
-    pub milestone_index: u32,
-    pub reason: String,
-    pub disputed_at: u64,
-}
-
 /// Richer validator status — distinguishes unregistered from revoked.
 #[contracttype]
 #[derive(Clone, Debug, PartialEq)]
@@ -69,6 +59,15 @@ pub struct MilestoneDispute {
     pub milestone_index: u32,
     pub reason: String,
     pub disputed_at: u64,
+}
+
+/// A lightweight reference to a milestone (player + index).
+/// Stored in `DataKey::ValidatorMilestones` as a compact per-validator index.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct MilestoneRef {
+    pub player_id: u64,
+    pub milestone_index: u32,
 }
 
 #[contracttype]

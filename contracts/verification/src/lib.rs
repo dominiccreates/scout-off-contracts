@@ -16,7 +16,7 @@ pub mod events;
 mod types;
 
 use errors::VerificationError;
-use types::{ContractHealth, DataKey, GlobalMilestoneEntry, GlobalMilestoneIndexPage, Milestone, MilestoneDispute, Validator, ValidatorStatus};
+use types::{ContractHealth, DataKey, GlobalMilestoneEntry, GlobalMilestoneIndexPage, Milestone, MilestoneDispute, MilestoneRef, Validator, ValidatorStatus};
 
 use soroban_sdk::{contract, contractimpl, Address, Env, String, Vec};
 
@@ -37,6 +37,9 @@ const PERSISTENT_TTL_MAX: u32 = 2_000;
 /// Increase requires a contract upgrade because the ValidatorVector entry
 /// is bounded by Soroban's 64 KB per-entry limit.
 const MAX_VALIDATORS: u32 = 100;
+
+/// Maximum milestones a single validator may approve for one player.
+const MAX_MILESTONES_PER_PLAYER_PER_VALIDATOR: u32 = 5;
 
 // Admin key TTL — ~30 days at 5s/ledger.
 const ADMIN_BUMP_LEDGERS: u32 = 518400;
@@ -941,7 +944,7 @@ mod tests {
         client.initialize(&admin);
 
         let validator = Address::generate(&env);
-        client.register_validator(&validator, &String::from_str(&env, "Coach"));
+        client.register_validator(&validator, &String::from_str(&env, "Senior Coach"));
 
         // Unknown validator returns empty vec
         let unknown = Address::generate(&env);
@@ -968,7 +971,7 @@ mod tests {
         client.initialize(&admin);
 
         let validator = Address::generate(&env);
-        client.register_validator(&validator, &String::from_str(&env, "Coach"));
+        client.register_validator(&validator, &String::from_str(&env, "Senior Coach"));
 
         // Approve two milestones for the same player
         client.approve_milestone(&validator, &1u64, &String::from_str(&env, "m1"), &String::from_str(&env, VALID_CID_V0));
@@ -990,8 +993,8 @@ mod tests {
 
         let v1 = Address::generate(&env);
         let v2 = Address::generate(&env);
-        client.register_validator(&v1, &String::from_str(&env, "Coach A"));
-        client.register_validator(&v2, &String::from_str(&env, "Coach B"));
+        client.register_validator(&v1, &String::from_str(&env, "Pro Coach AA"));
+        client.register_validator(&v2, &String::from_str(&env, "Pro Coach BB"));
 
         client.approve_milestone(&v1, &1u64, &String::from_str(&env, "m1"), &String::from_str(&env, VALID_CID_V0));
         client.approve_milestone(&v1, &2u64, &String::from_str(&env, "m2"), &String::from_str(&env, VALID_CID_V0));

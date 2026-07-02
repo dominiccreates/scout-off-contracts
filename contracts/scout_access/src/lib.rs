@@ -4,7 +4,7 @@ mod events;
 mod types;
 
 use errors::ScoutAccessError;
-use types::{ContactRecord, DataKey, Subscription, TrialOffer};
+use types::{ContactRecord, DataKey, ProContactPeriod, Subscription, TrialOffer};
 pub use types::{FeeConfig, SubscriptionTier};
 
 use soroban_sdk::{contract, contractimpl, token, Address, Env, String, Vec};
@@ -44,8 +44,6 @@ const INSTANCE_TTL_MAX: u32 = 500;
 // Persistent storage TTL bump for subscriptions / contact records.
 const PERSISTENT_TTL_MIN: u32 = 200;
 const PERSISTENT_TTL_MAX: u32 = 2_000;
-const ADMIN_BUMP_LEDGERS: u32 = 1000;
-
 // Admin key TTL — kept equal to PERSISTENT_TTL_MAX for simplicity.
 const ADMIN_BUMP_LEDGERS: u32 = 2_000;
 
@@ -447,19 +445,19 @@ impl ScoutAccessContract {
         // Pro-tier quota enforcement: limit contacts to pro_contact_limit per
         // subscription period.  The counter resets automatically on renewal
         // because a new period_start is stored when the scout subscribes again.
-        if sub.tier == SubscriptionTier::Pro {
+        if subscription.tier == SubscriptionTier::Pro {
             let period_key = DataKey::ProContactCount(scout.clone());
             let period: ProContactPeriod = env
                 .storage()
                 .persistent()
                 .get(&period_key)
                 .unwrap_or(ProContactPeriod {
-                    period_start: sub.subscribed_at,
+                    period_start: subscription.subscribed_at,
                     count: 0,
                 });
             // If the stored period_start predates the current subscription,
             // treat the counter as zero (subscription was renewed).
-            let current_count = if period.period_start == sub.subscribed_at {
+            let current_count = if period.period_start == subscription.subscribed_at {
                 period.count
             } else {
                 0u32
@@ -468,7 +466,7 @@ impl ScoutAccessContract {
                 return Err(ScoutAccessError::ProContactLimitReached);
             }
             let new_period = ProContactPeriod {
-                period_start: sub.subscribed_at,
+                period_start: subscription.subscribed_at,
                 count: current_count.checked_add(1).ok_or(ScoutAccessError::Overflow)?,
             };
             env.storage().persistent().set(&period_key, &new_period);

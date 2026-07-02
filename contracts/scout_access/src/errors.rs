@@ -40,4 +40,6 @@ pub enum ScoutAccessError {
     ContactQuotaExceeded = 18,
     /// Scout sent a trial offer to the same player within the cooldown window
     TrialOfferRateLimited = 19,
+    /// Pro-tier scout has reached the contact limit for the current subscription period
+    ProContactLimitReached = 20,
 }
