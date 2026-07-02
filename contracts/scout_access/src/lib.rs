@@ -62,6 +62,11 @@ const MIN_UPGRADE_INTERVAL_SECS: u64 = 3600;
 // to the same player — enforces one pending offer per (scout, player) per day.
 const TRIAL_OFFER_COOLDOWN_SECS: u64 = 86_400; // 24 hours
 
+// Minimum fee floors (stroops) to prevent admin from setting negligible fees
+// that would effectively remove the monetization model.
+const MIN_CONTACT_FEE_STROOPS: i128 = 100_000;      // 0.01 XLM
+const MIN_SUB_FEE_STROOPS: i128 = 1_000_000;        // 0.1 XLM
+
 #[contract]
 pub struct ScoutAccessContract;
 
@@ -679,6 +684,17 @@ impl ScoutAccessContract {
             PERSISTENT_TTL_MAX,
         );
 
+        // Verify the scout has previously contacted this player.
+        let contact_key = DataKey::ContactRecord(player_id, scout.clone());
+        if !env.storage().persistent().has(&contact_key) {
+            return Err(ScoutAccessError::Unauthorized);
+        }
+        env.storage().persistent().extend_ttl(
+            &contact_key,
+            PERSISTENT_TTL_MIN,
+            PERSISTENT_TTL_MAX,
+        );
+
         // #456: Enforce per-(scout, player) cooldown to prevent offer flooding.
         // Reject a second offer from the same scout to the same player within
         // TRIAL_OFFER_COOLDOWN_SECS (24 h). Offers to different players are
@@ -1155,12 +1171,12 @@ impl ScoutAccessContract {
         Self::accumulate_fee(env, amount)
     }
 
-    /// Validate that every fee field is positive and sub_duration_secs is non-zero.
+    /// Validate that every fee field meets the minimum floor and sub_duration_secs is non-zero.
     fn validate_fee_config(config: &FeeConfig) -> Result<(), ScoutAccessError> {
-        if config.contact_fee_stroops <= 0
-            || config.basic_sub_stroops <= 0
-            || config.pro_sub_stroops <= 0
-            || config.elite_sub_stroops <= 0
+        if config.contact_fee_stroops < MIN_CONTACT_FEE_STROOPS
+            || config.basic_sub_stroops < MIN_SUB_FEE_STROOPS
+            || config.pro_sub_stroops < MIN_SUB_FEE_STROOPS
+            || config.elite_sub_stroops < MIN_SUB_FEE_STROOPS
             || config.sub_duration_secs == 0
             || config.pro_contact_limit == 0
         {
@@ -1693,6 +1709,7 @@ mod tests {
         mint_token(&env, &xlm, &admin, &scout, 100_000_000);
 
         client.subscribe(&scout, &SubscriptionTier::Elite);
+        client.pay_to_contact(&scout, &1u64);
         let idx = client.log_trial_offer(&scout, &1u64, &String::from_str(&env, "QmPK1s3pNYLi9ERiq3BDxKa4XosgWwFRQUydHUtz4YgpqB"));
         assert_eq!(idx, 1);
         assert_eq!(client.get_trial_count(&1u64), 1);
@@ -1731,6 +1748,7 @@ mod tests {
         mint_token(&env, &xlm, &admin, &scout, 100_000_000);
 
         client.subscribe(&scout, &SubscriptionTier::Elite);
+        client.pay_to_contact(&scout, &1u64);
         let idx = client.log_trial_offer(
             &scout,
             &1u64,
@@ -1747,6 +1765,7 @@ mod tests {
         mint_token(&env, &xlm, &admin, &scout, 100_000_000);
 
         client.subscribe(&scout, &SubscriptionTier::Elite);
+        client.pay_to_contact(&scout, &1u64);
         let idx = client.log_trial_offer(
             &scout,
             &1u64,
@@ -1772,6 +1791,7 @@ mod tests {
         let scout = Address::generate(&env);
         mint_token(&env, &xlm, &admin, &scout, 100_000_000);
         client.subscribe(&scout, &SubscriptionTier::Elite);
+        client.pay_to_contact(&scout, &1u64);
 
         client.log_trial_offer(&scout, &1u64, &String::from_str(&env, "QmPK1s3pNYLi9ERiq3BDxKa4XosgWwFRQUydHUtz4YgpqB"));
 
@@ -2487,6 +2507,7 @@ mod tests {
         let scout = Address::generate(&env);
         mint_token(&env, &xlm, &admin, &scout, 100_000_000);
         client.subscribe(&scout, &SubscriptionTier::Elite);
+        client.pay_to_contact(&scout, &player_id);
         let idx = client.log_trial_offer(
             &scout,
             &player_id,
@@ -2541,6 +2562,7 @@ mod tests {
         let scout = Address::generate(&env);
         mint_token(&env, &xlm, &admin, &scout, 100_000_000);
         client.subscribe(&scout, &SubscriptionTier::Elite);
+        client.pay_to_contact(&scout, &player_id);
         let result = client.try_log_trial_offer(
             &scout,
             &player_id,
@@ -2582,6 +2604,7 @@ mod tests {
         mint_token(&env, &xlm, &admin, &scout, 100_000_000);
 
         client.subscribe(&scout, &SubscriptionTier::Elite);
+        client.pay_to_contact(&scout, &1u64);
         // First offer — must succeed.
         client.log_trial_offer(&scout, &1u64, &String::from_str(&env, "QmPK1s3pNYLi9ERiq3BDxKa4XosgWwFRQUydHUtz4YgpqB"));
 
@@ -2601,6 +2624,7 @@ mod tests {
         mint_token(&env, &xlm, &admin, &scout, 100_000_000);
 
         client.subscribe(&scout, &SubscriptionTier::Elite);
+        client.pay_to_contact(&scout, &1u64);
         client.log_trial_offer(&scout, &1u64, &String::from_str(&env, "QmPK1s3pNYLi9ERiq3BDxKa4XosgWwFRQUydHUtz4YgpqB"));
 
         // Advance past the 24-hour cooldown.
@@ -2623,7 +2647,10 @@ mod tests {
         mint_token(&env, &xlm, &admin, &scout, 100_000_000);
 
         client.subscribe(&scout, &SubscriptionTier::Elite);
+        client.pay_to_contact(&scout, &1u64);
         client.log_trial_offer(&scout, &1u64, &String::from_str(&env, "QmPK1s3pNYLi9ERiq3BDxKa4XosgWwFRQUydHUtz4YgpqB"));
+
+        client.pay_to_contact(&scout, &2u64);
 
         // Offer to a DIFFERENT player must not be rate-limited.
         let result = client.try_log_trial_offer(
@@ -2672,6 +2699,7 @@ mod tests {
 
         // Subscribe scout to Elite tier
         client.subscribe(&scout, &SubscriptionTier::Elite);
+        client.pay_to_contact(&scout, &player_id);
 
         // Pause the contract
         client.pause_contract();

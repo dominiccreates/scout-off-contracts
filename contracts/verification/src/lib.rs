@@ -255,6 +255,60 @@ impl VerificationContract {
         Ok(())
     }
 
+    /// Revoke multiple validators in a single atomic transaction (admin only).
+    /// Iterates the wallet list and applies the same revoke logic for each,
+    /// emitting one `validator_revoked` event per revocation.
+    /// If a wallet is not found, the entire batch fails (atomicity).
+    pub fn batch_revoke_validators(
+        env: Env,
+        wallets: Vec<Address>,
+        reason: Option<String>,
+    ) -> Result<(), VerificationError> {
+        Self::require_admin(&env)?;
+
+        if let Some(ref r) = reason {
+            if r.len() > 128 {
+                return Err(VerificationError::ReasonTooLong);
+            }
+        }
+
+        let reason_str = reason.unwrap_or(String::from_str(&env, ""));
+
+        for i in 0..wallets.len() {
+            let wallet = wallets.get(i).unwrap();
+
+            let mut validator: Validator = env
+                .storage()
+                .persistent()
+                .get(&DataKey::Validator(wallet.clone()))
+                .ok_or(VerificationError::ValidatorNotFound)?;
+            validator.active = false;
+            env.storage()
+                .persistent()
+                .set(&DataKey::Validator(wallet.clone()), &validator);
+
+            let mut validator_vector: Vec<Address> = env
+                .storage()
+                .persistent()
+                .get(&DataKey::ValidatorVector)
+                .unwrap_or_else(|| Vec::new(&env));
+            let mut new_vector: Vec<Address> = Vec::new(&env);
+            for j in 0..validator_vector.len() {
+                let addr = validator_vector.get(j).unwrap();
+                if addr != wallet {
+                    new_vector.push_back(addr);
+                }
+            }
+            env.storage()
+                .persistent()
+                .set(&DataKey::ValidatorVector, &new_vector);
+
+            events::validator_revoked(&env, &wallet, &reason_str);
+        }
+
+        Ok(())
+    }
+
     /// Re-activate a previously revoked validator (admin only).
     ///
     /// Sets `validator.active = true` so the validator can approve milestones
@@ -506,6 +560,7 @@ impl VerificationContract {
         env.storage()
             .persistent()
             .set(&val_key, &(val_count.checked_add(1).ok_or(VerificationError::Overflow)?));
+        env.storage().persistent().extend_ttl(&val_key, PERSISTENT_TTL_MIN, PERSISTENT_TTL_MAX);
 
         env.storage().persistent().set(
             &vp_key,
