@@ -188,7 +188,9 @@ fn test_trial_counter_increments_across_two_scouts() {
     subscribe_elite(&h, &scout_a);
 
     let hash_a = String::from_str(&h.env, "QmTrialOfferScoutAHash1234567");
-    let index_a = h.scout_access.log_trial_offer(&scout_a, &player_id, &hash_a);
+    let index_a = h
+        .scout_access
+        .log_trial_offer(&scout_a, &player_id, &hash_a);
 
     // First call must return index 1
     assert_eq!(index_a, 1, "first trial offer must be assigned index 1");
@@ -203,7 +205,9 @@ fn test_trial_counter_increments_across_two_scouts() {
     subscribe_elite(&h, &scout_b);
 
     let hash_b = String::from_str(&h.env, "QmTrialOfferScoutBHash9876543");
-    let index_b = h.scout_access.log_trial_offer(&scout_b, &player_id, &hash_b);
+    let index_b = h
+        .scout_access
+        .log_trial_offer(&scout_b, &player_id, &hash_b);
 
     // Second call must return index 2
     assert_eq!(index_b, 2, "second trial offer must be assigned index 2");

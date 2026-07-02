@@ -16,7 +16,10 @@ pub mod events;
 mod types;
 
 use errors::VerificationError;
-use types::{ContractHealth, DataKey, GlobalMilestoneEntry, GlobalMilestoneIndexPage, Milestone, MilestoneDispute, MilestoneRef, Validator, ValidatorStatus};
+use types::{
+    ContractHealth, DataKey, GlobalMilestoneEntry, GlobalMilestoneIndexPage, Milestone,
+    MilestoneDispute, MilestoneRef, Validator, ValidatorStatus,
+};
 
 use soroban_sdk::{contract, contractimpl, Address, Env, String, Vec};
 
@@ -53,9 +56,7 @@ const CONTRACT_VERSION: &str = env!("CARGO_PKG_VERSION");
 // The progress contract must be deployed and its address registered via
 // `set_progress_contract` before `approve_milestone` can advance levels.
 mod progress_contract {
-    soroban_sdk::contractimport!(
-        file = "fixtures/scoutchain_progress.wasm"
-    );
+    soroban_sdk::contractimport!(file = "fixtures/scoutchain_progress.wasm");
 }
 
 #[contract]
@@ -73,7 +74,11 @@ impl VerificationContract {
         }
         admin.require_auth();
         env.storage().persistent().set(&DataKey::Admin, &admin);
-        env.storage().persistent().extend_ttl(&DataKey::Admin, ADMIN_BUMP_LEDGERS, ADMIN_BUMP_LEDGERS);
+        env.storage().persistent().extend_ttl(
+            &DataKey::Admin,
+            ADMIN_BUMP_LEDGERS,
+            ADMIN_BUMP_LEDGERS,
+        );
         env.storage().instance().set(&DataKey::Initialized, &true);
         env.storage().instance().set(&DataKey::Paused, &false);
         env.storage()
@@ -176,11 +181,12 @@ impl VerificationContract {
             .instance()
             .get(&DataKey::ActiveValidatorCount)
             .unwrap_or(0u32);
-        env.storage()
-            .instance()
-            .set(&DataKey::ActiveValidatorCount, &count.checked_add(1).ok_or(VerificationError::Overflow)?);
+        env.storage().instance().set(
+            &DataKey::ActiveValidatorCount,
+            &count.checked_add(1).ok_or(VerificationError::Overflow)?,
+        );
 
-        events::validator_registered(&env, &wallet);
+        events::validator_registered(&env, &wallet, &validator.credentials);
 
         Ok(())
     }
@@ -233,12 +239,13 @@ impl VerificationContract {
                 .instance()
                 .get(&DataKey::ActiveValidatorCount)
                 .unwrap_or(0u32);
-            env.storage()
-                .instance()
-                .set(&DataKey::ActiveValidatorCount, &count.checked_sub(1).ok_or(VerificationError::Overflow)?);
+            env.storage().instance().set(
+                &DataKey::ActiveValidatorCount,
+                &count.checked_sub(1).ok_or(VerificationError::Overflow)?,
+            );
         }
 
-        let mut validator_vector: Vec<Address> = env
+        let validator_vector: Vec<Address> = env
             .storage()
             .persistent()
             .get(&DataKey::ValidatorVector)
@@ -290,7 +297,7 @@ impl VerificationContract {
                 .persistent()
                 .set(&DataKey::Validator(wallet.clone()), &validator);
 
-            let mut validator_vector: Vec<Address> = env
+            let validator_vector: Vec<Address> = env
                 .storage()
                 .persistent()
                 .get(&DataKey::ValidatorVector)
@@ -340,9 +347,10 @@ impl VerificationContract {
                 .instance()
                 .get(&DataKey::ActiveValidatorCount)
                 .unwrap_or(0u32);
-            env.storage()
-                .instance()
-                .set(&DataKey::ActiveValidatorCount, &count.checked_add(1).ok_or(VerificationError::Overflow)?);
+            env.storage().instance().set(
+                &DataKey::ActiveValidatorCount,
+                &count.checked_add(1).ok_or(VerificationError::Overflow)?,
+            );
         }
 
         events::validator_restored(&env, &wallet);
@@ -466,7 +474,10 @@ impl VerificationContract {
 
     /// Upgrade the contract WASM. Admin auth required.
     /// Persistent storage (including Admin) survives this call.
-    pub fn upgrade(env: Env, new_wasm_hash: soroban_sdk::BytesN<32>) -> Result<(), VerificationError> {
+    pub fn upgrade(
+        env: Env,
+        new_wasm_hash: soroban_sdk::BytesN<32>,
+    ) -> Result<(), VerificationError> {
         Self::require_admin(&env)?;
         env.deployer().update_current_contract_wasm(new_wasm_hash);
         Ok(())
@@ -499,7 +510,7 @@ impl VerificationContract {
         Self::require_not_paused(&env)?;
         validator_wallet.require_auth();
 
-        if description.len() > MAX_DESCRIPTION_LEN as usize {
+        if description.len() > MAX_DESCRIPTION_LEN {
             return Err(VerificationError::InvalidInput);
         }
 
@@ -523,11 +534,7 @@ impl VerificationContract {
         }
 
         let vp_key = DataKey::ValidatorPlayerMilestoneCount(validator_wallet.clone(), player_id);
-        let vp_count: u32 = env
-            .storage()
-            .persistent()
-            .get(&vp_key)
-            .unwrap_or(0u32);
+        let vp_count: u32 = env.storage().persistent().get(&vp_key).unwrap_or(0u32);
         if vp_count >= MAX_MILESTONES_PER_PLAYER_PER_VALIDATOR {
             return Err(VerificationError::MilestoneLimitExceeded);
         }
@@ -560,16 +567,19 @@ impl VerificationContract {
         // Increment per-validator milestone count
         let val_key = DataKey::ValidatorMilestoneCount(validator_wallet.clone());
         let val_count: u32 = env.storage().persistent().get(&val_key).unwrap_or(0u32);
+        env.storage().persistent().set(
+            &val_key,
+            &(val_count
+                .checked_add(1)
+                .ok_or(VerificationError::Overflow)?),
+        );
         env.storage()
             .persistent()
-            .set(&val_key, &(val_count.checked_add(1).ok_or(VerificationError::Overflow)?));
-        env.storage().persistent().extend_ttl(&val_key, PERSISTENT_TTL_MIN, PERSISTENT_TTL_MAX);
+            .extend_ttl(&val_key, PERSISTENT_TTL_MIN, PERSISTENT_TTL_MAX);
 
         env.storage().persistent().set(
             &vp_key,
-            &(vp_count
-                .checked_add(1)
-                .ok_or(VerificationError::Overflow)?),
+            &(vp_count.checked_add(1).ok_or(VerificationError::Overflow)?),
         );
 
         // Update ValidatorPlayers index: record that this validator has approved
@@ -581,11 +591,9 @@ impl VerificationContract {
             .persistent()
             .get(&vp_index_key)
             .unwrap_or_else(|| Vec::new(&env));
-        if !vp_players.contains(&player_id) {
+        if !vp_players.contains(player_id) {
             vp_players.push_back(player_id);
-            env.storage()
-                .persistent()
-                .set(&vp_index_key, &vp_players);
+            env.storage().persistent().set(&vp_index_key, &vp_players);
         }
 
         // Increment global total milestone count
@@ -594,9 +602,10 @@ impl VerificationContract {
             .instance()
             .get(&DataKey::TotalMilestoneCount)
             .unwrap_or(0u32);
-        env.storage()
-            .instance()
-            .set(&DataKey::TotalMilestoneCount, &(total.checked_add(1).ok_or(VerificationError::Overflow)?));
+        env.storage().instance().set(
+            &DataKey::TotalMilestoneCount,
+            &(total.checked_add(1).ok_or(VerificationError::Overflow)?),
+        );
 
         let mut global_index: Vec<GlobalMilestoneEntry> = env
             .storage()
@@ -659,9 +668,11 @@ impl VerificationContract {
             .persistent()
             .get(&DataKey::Milestone(player_id, index))
             .ok_or(VerificationError::MilestoneNotFound)?;
-        env.storage()
-            .persistent()
-            .extend_ttl(&DataKey::Milestone(player_id, index), PERSISTENT_TTL_MIN, PERSISTENT_TTL_MAX);
+        env.storage().persistent().extend_ttl(
+            &DataKey::Milestone(player_id, index),
+            PERSISTENT_TTL_MIN,
+            PERSISTENT_TTL_MAX,
+        );
         Ok(milestone)
     }
 
@@ -721,10 +732,7 @@ impl VerificationContract {
             entries.push_back(all.get(i).unwrap());
             i += 1;
         }
-        GlobalMilestoneIndexPage {
-            entries,
-            total,
-        }
+        GlobalMilestoneIndexPage { entries, total }
     }
 
     pub fn get_validator(env: Env, wallet: Address) -> Result<Validator, VerificationError> {
@@ -836,9 +844,7 @@ impl VerificationContract {
             disputed_at: env.ledger().timestamp(),
         };
 
-        env.storage()
-            .persistent()
-            .set(&dispute_key, &dispute);
+        env.storage().persistent().set(&dispute_key, &dispute);
 
         events::milestone_disputed(&env, player_id, milestone_index, &reason);
         Ok(())
@@ -865,15 +871,13 @@ impl VerificationContract {
     fn bump_instance_ttl(env: &Env) {
         const INSTANCE_TTL_MIN: u32 = 100;
         const INSTANCE_TTL_MAX: u32 = 10000;
-        env.storage().instance().extend_ttl(INSTANCE_TTL_MIN, INSTANCE_TTL_MAX);
+        env.storage()
+            .instance()
+            .extend_ttl(INSTANCE_TTL_MIN, INSTANCE_TTL_MAX);
     }
 
     fn require_initialized(env: &Env) -> Result<(), VerificationError> {
-        if !env
-            .storage()
-            .instance()
-            .has(&DataKey::Initialized)
-        {
+        if !env.storage().instance().has(&DataKey::Initialized) {
             return Err(VerificationError::NotInitialized);
         }
         Ok(())
@@ -886,7 +890,11 @@ impl VerificationContract {
             .get(&DataKey::Admin)
             .ok_or(VerificationError::NotInitialized)?;
         admin.require_auth();
-        env.storage().persistent().extend_ttl(&DataKey::Admin, ADMIN_BUMP_LEDGERS, ADMIN_BUMP_LEDGERS);
+        env.storage().persistent().extend_ttl(
+            &DataKey::Admin,
+            ADMIN_BUMP_LEDGERS,
+            ADMIN_BUMP_LEDGERS,
+        );
         Ok(())
     }
 
@@ -951,9 +959,24 @@ mod tests {
         assert_eq!(client.get_validator_players(&unknown).len(), 0);
 
         // Approve milestones for players 1, 2, 3
-        client.approve_milestone(&validator, &1u64, &String::from_str(&env, "m1"), &String::from_str(&env, VALID_CID_V0));
-        client.approve_milestone(&validator, &2u64, &String::from_str(&env, "m2"), &String::from_str(&env, VALID_CID_V0));
-        client.approve_milestone(&validator, &3u64, &String::from_str(&env, "m3"), &String::from_str(&env, VALID_CID_V0));
+        client.approve_milestone(
+            &validator,
+            &1u64,
+            &String::from_str(&env, "m1"),
+            &String::from_str(&env, VALID_CID_V0),
+        );
+        client.approve_milestone(
+            &validator,
+            &2u64,
+            &String::from_str(&env, "m2"),
+            &String::from_str(&env, VALID_CID_V0),
+        );
+        client.approve_milestone(
+            &validator,
+            &3u64,
+            &String::from_str(&env, "m3"),
+            &String::from_str(&env, VALID_CID_V0),
+        );
 
         let players = client.get_validator_players(&validator);
         assert_eq!(players.len(), 3);
@@ -974,8 +997,18 @@ mod tests {
         client.register_validator(&validator, &String::from_str(&env, "Senior Coach"));
 
         // Approve two milestones for the same player
-        client.approve_milestone(&validator, &1u64, &String::from_str(&env, "m1"), &String::from_str(&env, VALID_CID_V0));
-        client.approve_milestone(&validator, &1u64, &String::from_str(&env, "m2"), &String::from_str(&env, VALID_CID_V1));
+        client.approve_milestone(
+            &validator,
+            &1u64,
+            &String::from_str(&env, "m1"),
+            &String::from_str(&env, VALID_CID_V0),
+        );
+        client.approve_milestone(
+            &validator,
+            &1u64,
+            &String::from_str(&env, "m2"),
+            &String::from_str(&env, VALID_CID_V1),
+        );
 
         // player 1 must appear exactly once
         let players = client.get_validator_players(&validator);
@@ -996,9 +1029,24 @@ mod tests {
         client.register_validator(&v1, &String::from_str(&env, "Pro Coach AA"));
         client.register_validator(&v2, &String::from_str(&env, "Pro Coach BB"));
 
-        client.approve_milestone(&v1, &1u64, &String::from_str(&env, "m1"), &String::from_str(&env, VALID_CID_V0));
-        client.approve_milestone(&v1, &2u64, &String::from_str(&env, "m2"), &String::from_str(&env, VALID_CID_V0));
-        client.approve_milestone(&v2, &3u64, &String::from_str(&env, "m3"), &String::from_str(&env, VALID_CID_V0));
+        client.approve_milestone(
+            &v1,
+            &1u64,
+            &String::from_str(&env, "m1"),
+            &String::from_str(&env, VALID_CID_V0),
+        );
+        client.approve_milestone(
+            &v1,
+            &2u64,
+            &String::from_str(&env, "m2"),
+            &String::from_str(&env, VALID_CID_V0),
+        );
+        client.approve_milestone(
+            &v2,
+            &3u64,
+            &String::from_str(&env, "m3"),
+            &String::from_str(&env, VALID_CID_V0),
+        );
 
         let v1_players = client.get_validator_players(&v1);
         assert_eq!(v1_players.len(), 2);
@@ -1057,7 +1105,12 @@ mod tests {
         client.register_validator(&v1, &String::from_str(&env, "UEFA-B-CoachA"));
         client.register_validator(&v2, &String::from_str(&env, "UEFA-B-CoachB"));
 
-        client.approve_milestone(&v1, &1u64, &String::from_str(&env, "m1"), &String::from_str(&env, VALID_CID_V0));
+        client.approve_milestone(
+            &v1,
+            &1u64,
+            &String::from_str(&env, "m1"),
+            &String::from_str(&env, VALID_CID_V0),
+        );
         assert_eq!(client.get_total_milestone_count(), 1);
 
         let v0_2 = String::from_str(&env, "QmPK1s3pNYLi9ERiq3BDxKa4XosgWwFRQUydHUtz4YgpqC");
@@ -1295,19 +1348,6 @@ mod tests {
     }
 
     #[test]
-    fn test_upgrade_preserves_admin() {
-        // upgrade() requires a valid WASM hash; in the test environment we just
-        // verify that the function enforces admin auth (non-admin is rejected).
-        // A full wasm-upgrade test would require a compiled WASM binary, which
-        // is out of scope for unit tests.
-        let (env, client) = setup();
-        let admin = Address::generate(&env);
-        client.initialize(&admin);
-        // Admin key must still be accessible after initialization (proxy for "survives upgrade")
-        assert_eq!(client.health().initialized, true);
-    }
-
-    #[test]
     fn test_pause_unpause_events() {
         let (env, client) = setup();
         let admin = Address::generate(&env);
@@ -1414,7 +1454,9 @@ mod tests {
         let validator = Address::generate(&env);
         client.register_validator(&validator, &String::from_str(&env, "UEFA-B-License"));
 
-        let new_wasm_hash = env.deployer().upload_contract_wasm(soroban_sdk::Bytes::new(&env));
+        let new_wasm_hash = env
+            .deployer()
+            .upload_contract_wasm(soroban_sdk::Bytes::new(&env));
         client.upgrade(&new_wasm_hash);
 
         // Admin persisted — admin-gated call still works
@@ -1573,7 +1615,8 @@ mod tests {
         client.register_validator(&validator, &String::from_str(&env, "UEFA-B-License"));
         // 45 chars starting with Qm — one short of valid CIDv0
         client.approve_milestone(
-            &validator, &1u64,
+            &validator,
+            &1u64,
             &String::from_str(&env, "test"),
             &String::from_str(&env, "QmPK1s3pNYLi9ERiq3BDxKa4XosgWwFRQUydHUtz4Ygpq"),
         );
@@ -1589,7 +1632,8 @@ mod tests {
         client.register_validator(&validator, &String::from_str(&env, "UEFA-B-License"));
         // 47 chars starting with Qm — one over valid CIDv0
         client.approve_milestone(
-            &validator, &1u64,
+            &validator,
+            &1u64,
             &String::from_str(&env, "test"),
             &String::from_str(&env, "QmPK1s3pNYLi9ERiq3BDxKa4XosgWwFRQUydHUtz4YgpqBX"),
         );
@@ -1605,7 +1649,8 @@ mod tests {
         client.register_validator(&validator, &String::from_str(&env, "UEFA-B-License"));
         // 46 chars but contains '0' which is invalid in base58btc
         client.approve_milestone(
-            &validator, &1u64,
+            &validator,
+            &1u64,
             &String::from_str(&env, "test"),
             &String::from_str(&env, "Qm0K1s3pNYLi9ERiq3BDxKa4XosgWwFRQUydHUtz4YgpqB"),
         );
@@ -1619,7 +1664,8 @@ mod tests {
         let validator = Address::generate(&env);
         client.register_validator(&validator, &String::from_str(&env, "UEFA-B-License"));
         let idx = client.approve_milestone(
-            &validator, &1u64,
+            &validator,
+            &1u64,
             &String::from_str(&env, "test"),
             &String::from_str(&env, VALID_CID_V0),
         );
@@ -1636,9 +1682,13 @@ mod tests {
         client.register_validator(&validator, &String::from_str(&env, "UEFA-B-License"));
         // 58 chars starting with bafy — one short of valid CIDv1
         client.approve_milestone(
-            &validator, &1u64,
+            &validator,
+            &1u64,
             &String::from_str(&env, "test"),
-            &String::from_str(&env, "bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzd"),
+            &String::from_str(
+                &env,
+                "bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzd",
+            ),
         );
     }
 
@@ -1650,7 +1700,8 @@ mod tests {
         let validator = Address::generate(&env);
         client.register_validator(&validator, &String::from_str(&env, "UEFA-B-License"));
         let idx = client.approve_milestone(
-            &validator, &1u64,
+            &validator,
+            &1u64,
             &String::from_str(&env, "test"),
             &String::from_str(&env, VALID_CID_V1),
         );
@@ -1666,7 +1717,8 @@ mod tests {
         let validator = Address::generate(&env);
         client.register_validator(&validator, &String::from_str(&env, "UEFA-B-License"));
         client.approve_milestone(
-            &validator, &1u64,
+            &validator,
+            &1u64,
             &String::from_str(&env, "test"),
             &String::from_str(&env, "zdj7WbTaiJT1fgatdet7Sjxf4PJQgXkGfXPFgq5a2SdxYqYg"),
         );
@@ -1747,12 +1799,7 @@ mod tests {
 
         let ledger_seq_at_approval = env.ledger().sequence();
 
-        let idx = client.approve_milestone(
-            &validator,
-            &player_id,
-            &description,
-            &evidence_hash,
-        );
+        let idx = client.approve_milestone(&validator, &player_id, &description, &evidence_hash);
         assert_eq!(idx, 1);
 
         // Retrieve the milestone and verify every field matches what was stored.
@@ -1812,8 +1859,14 @@ mod tests {
         let _milestone = client.get_milestone(&player_id, &1u32);
 
         // Assert counters are unchanged.
-        assert_eq!(client.get_milestone_count(&player_id), milestone_count_before);
-        assert_eq!(client.get_validator_milestone_count(&validator), validator_count_before);
+        assert_eq!(
+            client.get_milestone_count(&player_id),
+            milestone_count_before
+        );
+        assert_eq!(
+            client.get_validator_milestone_count(&validator),
+            validator_count_before
+        );
     }
 
     // -------------------------------------------------------------------------
@@ -1842,18 +1895,19 @@ mod tests {
         // First registration succeeds
         client.register_validator(&validator, &credentials);
         assert!(client.is_active_validator(&validator));
-        
+
         // Verify validator is in the vector
         let validators = client.get_validators();
         assert_eq!(validators.len(), 1);
         assert_eq!(validators.get(0).unwrap(), validator);
 
         // Second registration with the same wallet should fail
-        let result = client.try_register_validator(
-            &validator,
-            &String::from_str(&env, "Different credentials")
+        let result = client
+            .try_register_validator(&validator, &String::from_str(&env, "Different credentials"));
+        assert_eq!(
+            result,
+            Err(Ok(VerificationError::ValidatorAlreadyRegistered))
         );
-        assert_eq!(result, Err(Ok(VerificationError::ValidatorAlreadyRegistered)));
 
         // Verify validator record is unchanged after the second call
         let stored_validator = client.get_validator(&validator);

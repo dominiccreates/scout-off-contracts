@@ -42,8 +42,8 @@ mod verification_contract {
 // Used to sync a player's progress level into the registration contract
 // whenever advance_level or reset_player_level is called.
 mod registration_contract {
-    use soroban_sdk::{contractclient, Env};
     use crate::types::ProgressLevel;
+    use soroban_sdk::{contractclient, Env};
 
     #[contractclient(name = "Client")]
     #[allow(dead_code)]
@@ -68,7 +68,11 @@ impl ProgressContract {
         admin.require_auth();
         Self::bump_instance_ttl(&env);
         env.storage().persistent().set(&DataKey::Admin, &admin);
-        env.storage().persistent().extend_ttl(&DataKey::Admin, ADMIN_BUMP_LEDGERS, ADMIN_BUMP_LEDGERS);
+        env.storage().persistent().extend_ttl(
+            &DataKey::Admin,
+            ADMIN_BUMP_LEDGERS,
+            ADMIN_BUMP_LEDGERS,
+        );
         env.storage().instance().set(&DataKey::Initialized, &true);
         env.storage().instance().set(&DataKey::Paused, &false);
         Ok(())
@@ -99,12 +103,20 @@ impl ProgressContract {
         Ok(())
     }
 
+    /// Store the verification contract address so advance_level can validate
+    /// that the caller is the configured VerificationContract (admin only).
+    pub fn set_verification_contract(env: Env, addr: Address) -> Result<(), ProgressError> {
+        Self::bump_instance_ttl(&env);
+        Self::require_admin(&env)?;
+        env.storage()
+            .instance()
+            .set(&DataKey::VerificationContract, &addr);
+        Ok(())
+    }
+
     /// Optionally whitelist the scout_access contract as a secondary caller of
     /// advance_level (for trial-offer Level-3 advances). Admin only.
-    pub fn set_scout_access_contract(
-        env: Env,
-        addr: Address,
-    ) -> Result<(), ProgressError> {
+    pub fn set_scout_access_contract(env: Env, addr: Address) -> Result<(), ProgressError> {
         Self::bump_instance_ttl(&env);
         Self::require_admin(&env)?;
         env.storage()
@@ -123,7 +135,11 @@ impl ProgressContract {
             .ok_or(ProgressError::NotInitialized)?;
         old_admin.require_auth();
         env.storage().persistent().set(&DataKey::Admin, &new_admin);
-        env.storage().persistent().extend_ttl(&DataKey::Admin, ADMIN_BUMP_LEDGERS, ADMIN_BUMP_LEDGERS);
+        env.storage().persistent().extend_ttl(
+            &DataKey::Admin,
+            ADMIN_BUMP_LEDGERS,
+            ADMIN_BUMP_LEDGERS,
+        );
         events::admin_transferred(&env, &old_admin, &new_admin);
         Ok(())
     }
@@ -210,10 +226,7 @@ impl ProgressContract {
             .instance()
             .get::<DataKey, Address>(&DataKey::ScoutAccessContract);
 
-        let caller_is_secondary = secondary
-            .as_ref()
-            .map(|a| a == &caller)
-            .unwrap_or(false);
+        let caller_is_secondary = secondary.as_ref().map(|a| a == &caller).unwrap_or(false);
 
         if caller_is_secondary {
             secondary.unwrap().require_auth();
@@ -221,24 +234,24 @@ impl ProgressContract {
             verification_contract.require_auth();
         }
 
-        // #457: When the VerificationContract is configured, validate that
-        // milestone_ref actually exists on-chain for this player.  A
-        // milestone_ref of 0 or one beyond the known count is rejected with
-        // InvalidProgressTransition, preventing fabricated indices from
-        // advancing a player's level.  This check is skipped when no
-        // VerificationContract is set so that the function remains backward
-        // compatible with deployments that have not yet wired the contracts.
-        {
-            let ver_addr: Option<Address> = env
-                .storage()
-                .instance()
-                .get::<DataKey, Address>(&DataKey::VerificationContract);
-            if let Some(ver_addr) = ver_addr {
-                let ver_client = verification_contract::Client::new(&env, &ver_addr);
-                let count = ver_client.get_milestone_count(&player_id);
-                if milestone_ref == 0 || milestone_ref > count {
-                    return Err(ProgressError::InvalidProgressTransition);
-                }
+        // #457: When called via the secondary (ScoutAccessContract) path,
+        // validate that milestone_ref actually exists on-chain for this
+        // player. A milestone_ref of 0 or one beyond the known count is
+        // rejected with InvalidProgressTransition, preventing fabricated
+        // indices from advancing a player's level.
+        //
+        // This check is skipped for the primary VerificationContract caller:
+        // that contract is the source of truth for milestone data (it calls
+        // advance_level directly from approve_milestone with a milestone_ref
+        // it just created), so re-validating would both be redundant and,
+        // because VerificationContract would still be on the call stack,
+        // trigger a disallowed contract re-entry when advance_level called
+        // back into it.
+        if caller_is_secondary {
+            let ver_client = verification_contract::Client::new(&env, &verification_contract);
+            let count = ver_client.get_milestone_count(&player_id);
+            if milestone_ref == 0 || milestone_ref > count {
+                return Err(ProgressError::InvalidProgressTransition);
             }
         }
 
@@ -299,16 +312,13 @@ impl ProgressContract {
 
     pub fn get_history_count(env: Env, player_id: u64) -> u32 {
         Self::bump_instance_ttl(&env);
-        let count: u32 = env
-            .storage()
-            .persistent()
-            .get(&DataKey::HistoryCounter(player_id))
-            .unwrap_or(0u32);
-        env.storage().persistent().extend_ttl(
-            &DataKey::HistoryCounter(player_id),
-            PERSISTENT_TTL_MIN,
-            PERSISTENT_TTL_MAX,
-        );
+        let key = DataKey::HistoryCounter(player_id);
+        let count: u32 = env.storage().persistent().get(&key).unwrap_or(0u32);
+        if env.storage().persistent().has(&key) {
+            env.storage()
+                .persistent()
+                .extend_ttl(&key, PERSISTENT_TTL_MIN, PERSISTENT_TTL_MAX);
+        }
         count
     }
 
@@ -390,11 +400,7 @@ impl ProgressContract {
     /// Query history entries for a player since a given Unix timestamp.
     /// Returns all entries where `updated_at >= since_timestamp`.
     /// Uses the HistoryVec for O(1) lookup, filters in-memory.
-    pub fn get_history_since(
-        env: Env,
-        player_id: u64,
-        since_timestamp: u64,
-    ) -> Vec<ProgressEntry> {
+    pub fn get_history_since(env: Env, player_id: u64, since_timestamp: u64) -> Vec<ProgressEntry> {
         let vec_key = DataKey::HistoryVec(player_id);
         let history: Vec<ProgressEntry> = env
             .storage()
@@ -518,11 +524,9 @@ impl ProgressContract {
             PERSISTENT_TTL_MAX,
         );
         env.storage().persistent().set(&history_key, &next_index);
-        env.storage().persistent().extend_ttl(
-            &history_key,
-            PERSISTENT_TTL_MIN,
-            PERSISTENT_TTL_MAX,
-        );
+        env.storage()
+            .persistent()
+            .extend_ttl(&history_key, PERSISTENT_TTL_MIN, PERSISTENT_TTL_MAX);
 
         // Also append to the single-key Vec so get_progress_history costs O(1) reads.
         let vec_key = DataKey::HistoryVec(player_id);
@@ -571,7 +575,11 @@ impl ProgressContract {
             .get(&DataKey::Admin)
             .ok_or(ProgressError::NotInitialized)?;
         admin.require_auth();
-        env.storage().persistent().extend_ttl(&DataKey::Admin, ADMIN_BUMP_LEDGERS, ADMIN_BUMP_LEDGERS);
+        env.storage().persistent().extend_ttl(
+            &DataKey::Admin,
+            ADMIN_BUMP_LEDGERS,
+            ADMIN_BUMP_LEDGERS,
+        );
         Ok(admin)
     }
 }
@@ -587,6 +595,21 @@ mod tests {
         vec, Env, IntoVal, Symbol,
     };
 
+    /// Deterministically generate a syntactically valid CIDv0 string (46 chars,
+    /// "Qm" prefix, base58btc charset) so tests can approve unique milestones.
+    fn dummy_cid(env: &Env, seed: u32) -> String {
+        const ALPHABET: &[u8] = b"123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
+        let mut buf = [0u8; 46];
+        buf[0] = b'Q';
+        buf[1] = b'm';
+        let mut x = seed;
+        for slot in buf.iter_mut().skip(2) {
+            *slot = ALPHABET[(x as usize) % ALPHABET.len()];
+            x = x.wrapping_mul(31).wrapping_add(7);
+        }
+        String::from_str(env, core::str::from_utf8(&buf).unwrap())
+    }
+
     fn setup() -> (Env, ProgressContractClient<'static>, Address) {
         let env = Env::default();
         env.mock_all_auths();
@@ -594,10 +617,43 @@ mod tests {
         let client = ProgressContractClient::new(&env, &id);
         let admin = Address::generate(&env);
         client.initialize(&admin);
-        // Wire a dummy verification contract so advance_level doesn't reject callers.
-        let verification = Address::generate(&env);
-        client.set_verification_contract(&verification);
-        (env, client, verification)
+
+        // Wire a real verification contract so advance_level's on-chain
+        // milestone_ref validation (#457) has something to query. Pre-approve
+        // milestones 1-10 (via two validators, since MAX_MILESTONES_PER_PLAYER_PER_VALIDATOR
+        // caps each validator at 5) for every player_id used across this test
+        // suite so existing level-progression tests (unrelated to milestone
+        // validation itself) keep passing.
+        let ver_id = env.register_contract(None, scoutchain_verification::VerificationContract);
+        let ver_client = scoutchain_verification::VerificationContractClient::new(&env, &ver_id);
+        let ver_admin = Address::generate(&env);
+        ver_client.initialize(&ver_admin);
+        let mut cid_seed: u32 = 0;
+        for player_id in [1u64, 2, 5, 7, 10, 20, 42, 55] {
+            for _ in 0..2u32 {
+                let milestone_validator = Address::generate(&env);
+                ver_client.register_validator(
+                    &milestone_validator,
+                    &String::from_str(&env, "Test License"),
+                );
+                for _ in 0..5 {
+                    cid_seed += 1;
+                    ver_client.approve_milestone(
+                        &milestone_validator,
+                        &player_id,
+                        &String::from_str(&env, "test milestone"),
+                        &dummy_cid(&env, cid_seed),
+                    );
+                }
+            }
+        }
+        client.set_verification_contract(&ver_id);
+
+        // Caller identity used across tests to invoke advance_level. Auth is
+        // mocked in these tests, so its identity need not match the validator
+        // registered on the verification contract above.
+        let validator = Address::generate(&env);
+        (env, client, validator)
     }
 
     #[test]
@@ -662,6 +718,7 @@ mod tests {
     // simulated ledger advancement past the default (un-bumped) TTL.
     #[test]
     fn test_history_entry_ttl_extended_after_write() {
+        use soroban_sdk::testutils::Ledger;
         let (env, client, validator) = setup();
 
         env.ledger().with_mut(|l| {
@@ -806,12 +863,18 @@ mod tests {
         let page1 = client.get_progress_history_page(&player_id, &0u32, &2u32);
         assert_eq!(page1.len(), 2);
         assert_eq!(page1.get(0).unwrap().old_level, ProgressLevel::Unverified);
-        assert_eq!(page1.get(1).unwrap().old_level, ProgressLevel::VerifiedIdentity);
+        assert_eq!(
+            page1.get(1).unwrap().old_level,
+            ProgressLevel::VerifiedIdentity
+        );
 
         // Middle page: offset=1, limit=1 → entry 2
         let mid = client.get_progress_history_page(&player_id, &1u32, &1u32);
         assert_eq!(mid.len(), 1);
-        assert_eq!(mid.get(0).unwrap().old_level, ProgressLevel::VerifiedIdentity);
+        assert_eq!(
+            mid.get(0).unwrap().old_level,
+            ProgressLevel::VerifiedIdentity
+        );
 
         // Last page: offset=2, limit=50 → entry 3 only
         let last = client.get_progress_history_page(&player_id, &2u32, &50u32);
@@ -919,10 +982,7 @@ mod tests {
                 &env,
                 (
                     contract_id,
-                    soroban_sdk::vec![
-                        &env,
-                        Symbol::new(&env, "admin_transferred").into_val(&env),
-                    ],
+                    soroban_sdk::vec![&env, Symbol::new(&env, "admin_transferred").into_val(&env),],
                     (old_admin.clone(), new_admin.clone()).into_val(&env),
                 )
             ]
@@ -981,15 +1041,29 @@ mod tests {
         let admin = Address::generate(&env);
         client.initialize(&admin);
 
-        // Register a player so we confirm persistent data also survives
-        let verification = Address::generate(&env);
-        client.set_verification_contract(&verification);
-
+        // Wire a real verification contract with one approved milestone so
+        // advance_level's on-chain milestone_ref validation (#457) succeeds.
+        let ver_id = env.register_contract(None, scoutchain_verification::VerificationContract);
+        let ver_client = scoutchain_verification::VerificationContractClient::new(&env, &ver_id);
+        let ver_admin = Address::generate(&env);
+        ver_client.initialize(&ver_admin);
+        let milestone_validator = Address::generate(&env);
+        ver_client.register_validator(&milestone_validator, &String::from_str(&env, "Test License"));
         let player_id = 1u64;
-        client.advance_level(&verification, &player_id, &1u32);
+        ver_client.approve_milestone(
+            &milestone_validator,
+            &player_id,
+            &String::from_str(&env, "test milestone"),
+            &String::from_str(&env, "QmPK1s3pNYLi9ERiq3BDxKa4XosgWwFRQUydHUtz4YgpqB"),
+        );
+        client.set_verification_contract(&ver_id);
+
+        client.advance_level(&milestone_validator, &player_id, &1u32);
 
         // Simulate upgrade: in testutils mode the host accepts empty bytes
-        let new_wasm_hash = env.deployer().upload_contract_wasm(soroban_sdk::Bytes::new(&env));
+        let new_wasm_hash = env
+            .deployer()
+            .upload_contract_wasm(soroban_sdk::Bytes::new(&env));
 
         client.upgrade(&new_wasm_hash);
 
@@ -1014,14 +1088,9 @@ mod tests {
 
         client.reset_player_level(&player_id, &ProgressLevel::Unverified);
 
-        assert_eq!(client.get_level(&player_id), ProgressLevel::Unverified);
-        assert_eq!(client.get_history_count(&player_id), 3);
-
-        let reset_entry = client.get_history_entry(&player_id, &3u32);
-        assert_eq!(reset_entry.old_level, ProgressLevel::PerformanceMilestones);
-        assert_eq!(reset_entry.new_level, ProgressLevel::Unverified);
-        assert_eq!(reset_entry.milestone_ref, 0);
-        // The event is still emitted
+        // The event is still emitted — checked immediately, since `events().all()`
+        // only reflects the most recent contract invocation and the read calls
+        // below are themselves separate invocations.
         assert_eq!(
             env.events().all(),
             vec![
@@ -1038,6 +1107,14 @@ mod tests {
                 ),
             ]
         );
+
+        assert_eq!(client.get_level(&player_id), ProgressLevel::Unverified);
+        assert_eq!(client.get_history_count(&player_id), 3);
+
+        let reset_entry = client.get_history_entry(&player_id, &3u32);
+        assert_eq!(reset_entry.old_level, ProgressLevel::PerformanceMilestones);
+        assert_eq!(reset_entry.new_level, ProgressLevel::Unverified);
+        assert_eq!(reset_entry.milestone_ref, 0);
     }
 
     #[test]
@@ -1105,14 +1182,16 @@ mod tests {
 
         client.advance_level(&validator, &player_id, &1u32);
 
+        // The emitted event must reflect the same new_level that is in storage.
+        // Checked immediately — `events().all()` only reflects the most recent
+        // invocation, and the reads below are themselves separate invocations.
+        let events = env.events().all();
+        assert_eq!(events.events().len(), 1);
+
         // After advance_level returns, both the storage state and the event
         // must agree: the player is at VerifiedIdentity.
         let stored_level = client.get_level(&player_id);
         assert_eq!(stored_level, ProgressLevel::VerifiedIdentity);
-
-        // The emitted event must reflect the same new_level that is in storage.
-        let events = env.events().all();
-        assert_eq!(events.len(), 1);
         // Event data encodes (player_id, old_level, new_level).
         // We verify new_level in storage equals VerifiedIdentity, which is
         // what the event carries — confirming the write happened before emit.
@@ -1124,8 +1203,16 @@ mod tests {
     // #457: milestone_ref is validated against the verification contract
     // -------------------------------------------------------------------------
 
+    // Milestone-ref validation only runs for the secondary (ScoutAccessContract)
+    // caller. The primary VerificationContract caller is always invoked as a
+    // nested call from its own `approve_milestone` (the only place it calls
+    // advance_level), so calling back into it to re-validate the very
+    // milestone_ref it just created would both be redundant and trigger a
+    // disallowed contract re-entry. ScoutAccessContract, by contrast, is an
+    // untrusted-for-milestone-data caller reachable via a clean (non-nested)
+    // call, so validating its milestone_ref is both meaningful and safe.
     #[test]
-    fn test_advance_level_invalid_milestone_ref_rejected_when_verification_set() {
+    fn test_advance_level_invalid_milestone_ref_rejected_for_secondary_caller() {
         use scoutchain_verification::VerificationContract;
         use scoutchain_verification::VerificationContractClient;
 
@@ -1138,15 +1225,20 @@ mod tests {
         let ver_admin = Address::generate(&env);
         ver_client.initialize(&ver_admin);
 
-        // Deploy progress contract and wire the verification address.
+        // Deploy progress contract and wire the verification + scout_access addresses.
         let prog_id = env.register_contract(None, ProgressContract);
         let prog_client = ProgressContractClient::new(&env, &prog_id);
         let prog_admin = Address::generate(&env);
         prog_client.initialize(&prog_admin);
         prog_client.set_verification_contract(&ver_id);
+        let scout_access = Address::generate(&env);
+        prog_client.set_scout_access_contract(&scout_access);
 
         let validator = Address::generate(&env);
-        ver_client.register_validator(&validator, &soroban_sdk::String::from_str(&env, "UEFA-B-License"));
+        ver_client.register_validator(
+            &validator,
+            &soroban_sdk::String::from_str(&env, "UEFA-B-License"),
+        );
         // Approve one milestone for player 1 → milestone_ref 1 is valid.
         ver_client.approve_milestone(
             &validator,
@@ -1156,15 +1248,15 @@ mod tests {
         );
 
         // Valid ref (1) must succeed.
-        let result = prog_client.try_advance_level(&validator, &1u64, &1u32);
+        let result = prog_client.try_advance_level(&scout_access, &1u64, &1u32);
         assert!(result.is_ok(), "valid milestone_ref should succeed");
 
         // Non-existent ref (99) must be rejected.
-        let result = prog_client.try_advance_level(&validator, &1u64, &99u32);
+        let result = prog_client.try_advance_level(&scout_access, &1u64, &99u32);
         assert_eq!(result, Err(Ok(ProgressError::InvalidProgressTransition)));
 
         // Zero ref must also be rejected.
-        let result = prog_client.try_advance_level(&validator, &1u64, &0u32);
+        let result = prog_client.try_advance_level(&scout_access, &1u64, &0u32);
         assert_eq!(result, Err(Ok(ProgressError::InvalidProgressTransition)));
     }
 

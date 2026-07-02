@@ -1,4 +1,4 @@
-#![allow(deprecated)]
+#![allow(deprecated, dead_code)]
 use soroban_sdk::{Address, Env, Symbol};
 
 pub const PLAYER_REGISTERED: &str = "player_registered";
