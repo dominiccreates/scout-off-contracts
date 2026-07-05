@@ -143,8 +143,25 @@ jobs:
 
       - name: Generate a local sandbox identity
         run: |
-          stellar keys generate ci-deployer --network local --fund
+          stellar keys generate ci-deployer --network local
           echo "ADMIN_ADDRESS=$(stellar keys address ci-deployer)" >> "$GITHUB_ENV"
+
+      - name: Fund the sandbox identity
+        run: |
+          set -euo pipefail
+          # `keys generate --fund` swallows funding errors (logs a warning and
+          # still exits 0), so fund separately with `keys fund`, which
+          # propagates failures, and retry since friendbot/Horizon can lag
+          # behind the RPC endpoint becoming ready.
+          for i in $(seq 1 30); do
+            if stellar keys fund ci-deployer --network local; then
+              exit 0
+            fi
+            echo "Friendbot not ready yet, retrying (${i}/30)..."
+            sleep 2
+          done
+          echo "ERROR: unable to fund ci-deployer after retries"
+          exit 1
 
       - name: Deploy all contracts to local sandbox
         run: |
