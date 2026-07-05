@@ -22,6 +22,7 @@ if [[ "$actual_version" != "$REQUIRED_STELLAR_CLI_VERSION" ]]; then
 fi
 
 NETWORK="${1:-testnet}"
+# shellcheck disable=SC1091
 source .env.contracts
 
 CONTRACTS=(registration verification progress scout_access)
