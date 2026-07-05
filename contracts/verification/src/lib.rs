@@ -935,6 +935,11 @@ mod tests {
 
     // A valid 46-character CIDv0 for use in tests.
     const VALID_CID_V0: &str = "QmPK1s3pNYLi9ERiq3BDxKa4XosgWwFRQUydHUtz4YgpqB";
+    // A second, distinct valid CIDv0 — evidence hashes must be globally unique,
+    // so tests approving multiple milestones need more than one valid CID.
+    const VALID_CID_V0_2: &str = "QmvwxyzABCDEFGHJKLMNPQRSTUVWXYZ123456789abcdef";
+    // A third, distinct valid CIDv0.
+    const VALID_CID_V0_3: &str = "QmABCDEFGHJKLMNPQRSTUVWXYZ123456789abcdefghijk";
     // A valid CIDv1 (>= 59 chars starting with "bafy").
     const VALID_CID_V1: &str = "bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi";
 
@@ -958,7 +963,8 @@ mod tests {
         let unknown = Address::generate(&env);
         assert_eq!(client.get_validator_players(&unknown).len(), 0);
 
-        // Approve milestones for players 1, 2, 3
+        // Approve milestones for players 1, 2, 3 (evidence hashes must be
+        // globally unique).
         client.approve_milestone(
             &validator,
             &1u64,
@@ -969,13 +975,13 @@ mod tests {
             &validator,
             &2u64,
             &String::from_str(&env, "m2"),
-            &String::from_str(&env, VALID_CID_V0),
+            &String::from_str(&env, VALID_CID_V0_2),
         );
         client.approve_milestone(
             &validator,
             &3u64,
             &String::from_str(&env, "m3"),
-            &String::from_str(&env, VALID_CID_V0),
+            &String::from_str(&env, VALID_CID_V0_3),
         );
 
         let players = client.get_validator_players(&validator);
@@ -1039,13 +1045,13 @@ mod tests {
             &v1,
             &2u64,
             &String::from_str(&env, "m2"),
-            &String::from_str(&env, VALID_CID_V0),
+            &String::from_str(&env, VALID_CID_V0_2),
         );
         client.approve_milestone(
             &v2,
             &3u64,
             &String::from_str(&env, "m3"),
-            &String::from_str(&env, VALID_CID_V0),
+            &String::from_str(&env, VALID_CID_V0_3),
         );
 
         let v1_players = client.get_validator_players(&v1);

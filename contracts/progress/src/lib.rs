@@ -1048,7 +1048,10 @@ mod tests {
         let ver_admin = Address::generate(&env);
         ver_client.initialize(&ver_admin);
         let milestone_validator = Address::generate(&env);
-        ver_client.register_validator(&milestone_validator, &String::from_str(&env, "Test License"));
+        ver_client.register_validator(
+            &milestone_validator,
+            &String::from_str(&env, "Test License"),
+        );
         let player_id = 1u64;
         ver_client.approve_milestone(
             &milestone_validator,

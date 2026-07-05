@@ -331,7 +331,6 @@ impl ScoutAccessContract {
     // Pay-to-contact
     // -------------------------------------------------------------------------
 
-
     /// Helper: check Pro tier contact quota with a specific count (batch support).
     fn check_pro_contact_quota_with_count(
         env: &Env,
@@ -744,7 +743,11 @@ impl ScoutAccessContract {
             .get::<DataKey, Address>(&DataKey::ProgressContract)
         {
             let progress_client = progress_contract::Client::new(&env, &progress_addr);
-            match progress_client.try_advance_level(&scout, &player_id, &next_index) {
+            match progress_client.try_advance_level(
+                &env.current_contract_address(),
+                &player_id,
+                &next_index,
+            ) {
                 Ok(_) => {}
                 Err(Ok(progress_contract::Error::AlreadyAtMaxLevel)) => {}
                 Err(_) => return Err(ScoutAccessError::ProgressCallFailed),
@@ -2449,19 +2452,24 @@ mod tests {
         use scoutchain_progress::ProgressContract;
         use scoutchain_progress::ProgressContractClient;
         use scoutchain_shared_types::ProgressLevel;
+        use scoutchain_verification::VerificationContract;
+        use scoutchain_verification::VerificationContractClient;
 
         let env = Env::default();
         env.mock_all_auths();
+
+        // --- deploy verification contract ---
+        let ver_id = env.register_contract(None, VerificationContract);
+        let ver_client = VerificationContractClient::new(&env, &ver_id);
+        let ver_admin = Address::generate(&env);
+        ver_client.initialize(&ver_admin);
 
         // --- deploy progress contract ---
         let progress_id = env.register_contract(None, ProgressContract);
         let progress_client = ProgressContractClient::new(&env, &progress_id);
         let progress_admin = Address::generate(&env);
         progress_client.initialize(&progress_admin);
-        // advance_level requires a VerificationContract to be configured; its
-        // milestone-ref validation only runs for the secondary caller, so a
-        // placeholder address is sufficient here.
-        progress_client.set_verification_contract(&Address::generate(&env));
+        progress_client.set_verification_contract(&ver_id);
 
         // --- deploy scout_access contract ---
         let admin = Address::generate(&env);
@@ -2472,16 +2480,29 @@ mod tests {
 
         // Wire scout_access → progress
         client.set_progress_contract(&progress_id);
+        // Whitelist scout_access as the secondary caller of advance_level.
+        progress_client.set_scout_access_contract(&scout_access_id);
 
-        // Pre-advance the player to PerformanceMilestones (Level 2) so that
+        // Pre-advance the player to PerformanceMilestones (Level 2) via the
+        // verification contract (the whitelisted primary caller) so that
         // log_trial_offer can push them to EliteTier (Level 3).
         let player_id = 1u64;
-        let caller = Address::generate(&env);
-        progress_client.advance_level(&caller, &player_id, &1u32); // → VerifiedIdentity
-        progress_client.advance_level(&caller, &player_id, &2u32); // → PerformanceMilestones
+        progress_client.advance_level(&ver_id, &player_id, &1u32); // → VerifiedIdentity
+        progress_client.advance_level(&ver_id, &player_id, &2u32); // → PerformanceMilestones
         assert_eq!(
             progress_client.get_level(&player_id),
             ProgressLevel::PerformanceMilestones
+        );
+
+        // Register a milestone so the trial-offer's milestone_ref (index 1)
+        // validates against the verification contract's milestone count.
+        let validator = Address::generate(&env);
+        ver_client.register_validator(&validator, &String::from_str(&env, "UEFA-B-License"));
+        ver_client.approve_milestone(
+            &validator,
+            &player_id,
+            &String::from_str(&env, "scored"),
+            &String::from_str(&env, "QmPK1s3pNYLi9ERiq3BDxKa4XosgWwFRQUydHUtz4YgpqB"),
         );
 
         // Scout subscribes at Elite tier and logs a trial offer
@@ -2508,19 +2529,24 @@ mod tests {
         use scoutchain_progress::ProgressContract;
         use scoutchain_progress::ProgressContractClient;
         use scoutchain_shared_types::ProgressLevel;
+        use scoutchain_verification::VerificationContract;
+        use scoutchain_verification::VerificationContractClient;
 
         let env = Env::default();
         env.mock_all_auths();
+
+        // --- deploy verification contract ---
+        let ver_id = env.register_contract(None, VerificationContract);
+        let ver_client = VerificationContractClient::new(&env, &ver_id);
+        let ver_admin = Address::generate(&env);
+        ver_client.initialize(&ver_admin);
 
         // --- deploy progress contract ---
         let progress_id = env.register_contract(None, ProgressContract);
         let progress_client = ProgressContractClient::new(&env, &progress_id);
         let progress_admin = Address::generate(&env);
         progress_client.initialize(&progress_admin);
-        // advance_level requires a VerificationContract to be configured; its
-        // milestone-ref validation only runs for the secondary caller, so a
-        // placeholder address is sufficient here.
-        progress_client.set_verification_contract(&Address::generate(&env));
+        progress_client.set_verification_contract(&ver_id);
 
         // --- deploy scout_access contract ---
         let admin = Address::generate(&env);
@@ -2531,16 +2557,29 @@ mod tests {
 
         // Wire scout_access → progress
         client.set_progress_contract(&progress_id);
+        // Whitelist scout_access as the secondary caller of advance_level.
+        progress_client.set_scout_access_contract(&scout_access_id);
 
-        // Pre-advance the player all the way to EliteTier
+        // Pre-advance the player all the way to EliteTier via the
+        // verification contract (the whitelisted primary caller).
         let player_id = 2u64;
-        let caller = Address::generate(&env);
-        progress_client.advance_level(&caller, &player_id, &1u32); // → VerifiedIdentity
-        progress_client.advance_level(&caller, &player_id, &2u32); // → PerformanceMilestones
-        progress_client.advance_level(&caller, &player_id, &3u32); // → EliteTier
+        progress_client.advance_level(&ver_id, &player_id, &1u32); // → VerifiedIdentity
+        progress_client.advance_level(&ver_id, &player_id, &2u32); // → PerformanceMilestones
+        progress_client.advance_level(&ver_id, &player_id, &3u32); // → EliteTier
         assert_eq!(
             progress_client.get_level(&player_id),
             ProgressLevel::EliteTier
+        );
+
+        // Register a milestone so the trial-offer's milestone_ref (index 1)
+        // validates against the verification contract's milestone count.
+        let validator = Address::generate(&env);
+        ver_client.register_validator(&validator, &String::from_str(&env, "UEFA-B-License"));
+        ver_client.approve_milestone(
+            &validator,
+            &player_id,
+            &String::from_str(&env, "scored"),
+            &String::from_str(&env, "QmPK1s3pNYLi9ERiq3BDxKa4XosgWwFRQUydHUtz4YgpqB"),
         );
 
         // log_trial_offer must still succeed even though AlreadyAtMaxLevel is returned
