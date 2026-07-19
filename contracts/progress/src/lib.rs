@@ -174,6 +174,11 @@ impl ProgressContract {
         env.storage()
             .persistent()
             .set(&DataKey::PlayerLevel(player_id), &target_level);
+        env.storage().persistent().extend_ttl(
+            &DataKey::PlayerLevel(player_id),
+            PERSISTENT_TTL_MIN,
+            PERSISTENT_TTL_MAX,
+        );
 
         // Sync to registration contract if set
         if let Some(reg_contract) = env
@@ -739,6 +744,33 @@ mod tests {
         let entry = client.get_history_entry(&player_id, &1u32);
         assert_eq!(entry.old_level, ProgressLevel::Unverified);
         assert_eq!(entry.new_level, ProgressLevel::VerifiedIdentity);
+    }
+
+    // PlayerLevel TTL must be extended when reset_player_level writes it —
+    // otherwise the reset level silently reverts to Unverified (get_level's
+    // default) once the un-bumped entry expires.
+    #[test]
+    fn test_reset_player_level_ttl_extended_after_write() {
+        use soroban_sdk::testutils::Ledger;
+        let (env, client, _validator) = setup();
+
+        env.ledger().with_mut(|l| {
+            l.sequence_number = 100_000;
+            l.min_persistent_entry_ttl = 500;
+            l.max_entry_ttl = 600_000;
+        });
+
+        let player_id = 55u64;
+        client.reset_player_level(&player_id, &ProgressLevel::EliteTier);
+
+        // Advance ledger past what the default un-bumped TTL would be.
+        env.ledger().with_mut(|l| {
+            l.sequence_number = 100_000 + 1_000;
+        });
+
+        // The reset level must still be readable — TTL was extended on write.
+        // Without the fix, this would fall back to ProgressLevel::Unverified.
+        assert_eq!(client.get_level(&player_id), ProgressLevel::EliteTier);
     }
 
     #[test]
