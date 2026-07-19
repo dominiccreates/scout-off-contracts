@@ -909,6 +909,29 @@ stellar contract invoke --id $VERIFICATION_CONTRACT_ID \
 
 ---
 
+#### `has_dispute(player_id: u64, milestone_index: u32) -> bool`
+
+Boolean convenience check. Returns `true` if a dispute exists for the given
+`(player_id, milestone_index)` pair, `false` otherwise (including when no
+dispute has ever been submitted or the milestone itself does not exist).
+
+This is a thin read-only wrapper around `get_dispute` — no new storage is
+introduced. Mirrors the `is_active_validator` pattern: callers that only need
+a yes/no answer (e.g. a frontend showing a "disputed" badge next to a milestone)
+avoid handling a `Result`/error path.
+
+| | |
+|---|---|
+| **Auth** | None |
+| **Errors** | None |
+
+```bash
+stellar contract invoke --id $VERIFICATION_CONTRACT_ID \
+  -- has_dispute --player_id 1 --milestone_index 1
+```
+
+---
+
 #### `version() -> String`
 
 Return the deployed contract version string (from `Cargo.toml` at build time).
