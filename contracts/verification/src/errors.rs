@@ -1,26 +1,38 @@
 use soroban_sdk::contracterror;
 
+/// Append-only: do not renumber existing variants. See docs/CONTRIBUTING.md.
 #[contracterror]
 #[derive(Copy, Clone, Debug, PartialEq)]
 #[repr(u32)]
 pub enum VerificationError {
+    // ── Initialization & lifecycle ──
     AlreadyInitialized = 1,
     NotInitialized = 2,
     ContractPaused = 3,
+    AlreadyConfigured = 11,
+
+    // ── Authorization ──
     Unauthorized = 4,
+
+    // ── Validators ──
     ValidatorNotFound = 5,
     ValidatorInactive = 6,
     ValidatorAlreadyRegistered = 7,
-    PlayerNotFound = 8,
-    InvalidInput = 9,
-    ReasonTooLong = 10,
-    AlreadyConfigured = 11,
-    ProgressCallFailed = 12,
-    Overflow = 13,
-    MilestoneNotFound = 14,
     ValidatorCapReached = 15,
+
+    // ── Milestones & evidence ──
+    PlayerNotFound = 8,
+    MilestoneNotFound = 14,
     DuplicateEvidence = 16,
     MilestoneLimitExceeded = 17,
+
+    // ── Input validation ──
+    InvalidInput = 9,
+    ReasonTooLong = 10,
+
+    // ── Cross-contract & arithmetic ──
+    ProgressCallFailed = 12,
+    Overflow = 13,
 }
 
 #[cfg(test)]
