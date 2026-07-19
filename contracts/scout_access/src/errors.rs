@@ -29,6 +29,7 @@ pub enum ScoutAccessError {
     TrialOfferNotFound = 11,
     /// Scout attempted to downgrade to a cheaper tier while subscription is still active
     SubscriptionDowngradeNotAllowed = 12,
+    /// Cross-contract `advance_level` failed.
     ProgressCallFailed = 14,
     /// A fee field is zero or negative, or sub_duration_secs is zero
     InvalidInput = 15,
