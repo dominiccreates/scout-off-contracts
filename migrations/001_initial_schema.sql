@@ -1,5 +1,7 @@
 -- ScoutChain — initial PostgreSQL schema
 -- Run by the backend on first startup or via a migration tool (e.g. node-pg-migrate)
+-- This migration is idempotent and safe to re-run after it has been applied:
+-- tables and indexes use IF NOT EXISTS, and seed data uses ON CONFLICT DO NOTHING.
 
 -- -----------------------------------------------------------------------
 -- Players
