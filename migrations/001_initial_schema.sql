@@ -69,7 +69,9 @@ CREATE INDEX IF NOT EXISTS idx_milestones_player ON milestones (player_id);
 -- -----------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS scout_subscriptions (
     scout           VARCHAR(56)  PRIMARY KEY,
-    tier            VARCHAR(16)  NOT NULL,           -- Basic | Pro | Elite
+    -- Valid values (case-sensitive): 'Basic', 'Pro', 'Elite'
+    -- The authoritative source of truth is the SubscriptionTier enum in the scout_access contract.
+    tier            VARCHAR(16)  NOT NULL,
     subscribed_at   BIGINT       NOT NULL,
     expires_at      BIGINT       NOT NULL,
     updated_db_at   TIMESTAMPTZ  NOT NULL DEFAULT NOW()
