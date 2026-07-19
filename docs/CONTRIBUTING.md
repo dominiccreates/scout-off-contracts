@@ -54,6 +54,37 @@ cargo fmt --all -- --check      # formatting must be clean
 - [ ] `ai.md` is updated if shared types, events, or env vars changed
 - [ ] `docs/CONTRACT_REFERENCE.md` is updated with new functions
 
+### Error variant ordering
+
+Every contract's `#[contracterror]` enum (`errors.rs`) is append-only.
+**New error variants must be added at the end of the enum, never inserted
+between existing variants and never renumbered.** This matches the
+`docs/VERSIONING.md` policy: renumbering or removing an existing
+`#[contracterror]` variant is a MAJOR breaking change because external
+consumers, on-chain event listeners, and off-chain indexers key off the
+numeric code.
+
+When adding a new variant:
+
+- Append it after the last existing variant. Do not "fill gaps" in the
+  numeric sequence — a gap (e.g. `12 → 14`) is a deliberate reservation,
+  not a bug, and must be preserved.
+- Group related variants together by inserting a brief section comment
+  above the group (e.g. `// ── Rate limiting ──`). Grouping is purely
+  cosmetic for readers; numeric contiguity within a group is **not**
+  required and **not** guaranteed by this convention.
+- If the new variant belongs to an existing group, place it at the end
+  of that group rather than at the end of the enum, so the grouping
+  remains readable. This does not violate append-only because the
+  variant's numeric code is the next free value after the current
+  maximum — readers can still scan the file top-to-bottom to find it.
+- Do not reuse a numeric code that has been removed in a prior version,
+  even if the variant is long-since deprecated. On-chain history may
+  still reference it.
+
+Rationale and the full set of breaking-change rules live in
+[`docs/VERSIONING.md`](VERSIONING.md).
+
 ## Validator authorization changes
 
 Changes to validator registration, revocation, or milestone approval logic require explicit
