@@ -55,5 +55,6 @@ pub enum ScoutAccessError {
     /// Arithmetic overflow occurred.
     Overflow = 10,
     // Numeric gap 11 → 14 is intentional (legacy reservation). Do not reuse.
+    /// Cross-contract `advance_level` failed.
     ProgressCallFailed = 14,
 }
