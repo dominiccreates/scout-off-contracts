@@ -863,6 +863,18 @@ impl VerificationContract {
             .ok_or(VerificationError::MilestoneNotFound)
     }
 
+    /// Boolean convenience check. Returns `true` if a dispute exists for the
+    /// given `(player_id, milestone_index)` pair, `false` otherwise.
+    ///
+    /// This is a thin read-only wrapper around `get_dispute` — no new storage
+    /// is introduced. Mirrors the `is_active_validator` pattern: callers that
+    /// only need a yes/no answer avoid handling a `Result`/error path.
+    pub fn has_dispute(env: Env, player_id: u64, milestone_index: u32) -> bool {
+        env.storage()
+            .persistent()
+            .has(&DataKey::MilestoneDispute(player_id, milestone_index))
+    }
+
     // -------------------------------------------------------------------------
     // Internal helpers
     // -------------------------------------------------------------------------
@@ -1878,6 +1890,91 @@ mod tests {
     // -------------------------------------------------------------------------
     // Duplicate validator registration tests
     // -------------------------------------------------------------------------
+
+    // -------------------------------------------------------------------------
+    // has_dispute convenience query tests
+    // -------------------------------------------------------------------------
+
+    /// `has_dispute` returns `false` before `dispute_milestone` is called and
+    /// `true` after, mirroring the `is_active_validator` boolean-helper pattern.
+    #[test]
+    fn test_has_dispute_false_before_and_true_after_dispute() {
+        let (env, client) = setup();
+        let admin = Address::generate(&env);
+        client.initialize(&admin);
+
+        let validator = Address::generate(&env);
+        client.register_validator(&validator, &String::from_str(&env, "UEFA-B-License"));
+
+        let player_wallet = Address::generate(&env);
+        let player_id: u64 = 1u64;
+        let milestone_index: u32 = 1u32;
+
+        // Approve a milestone so we have something to dispute
+        client.approve_milestone(
+            &validator,
+            &player_id,
+            &String::from_str(&env, "Identity verified"),
+            &String::from_str(&env, VALID_CID_V0),
+        );
+
+        // Before dispute: must return false
+        assert!(!client.has_dispute(&player_id, &milestone_index));
+
+        // Submit dispute
+        client.dispute_milestone(
+            &player_wallet,
+            &player_id,
+            &milestone_index,
+            &String::from_str(&env, "Milestone was not completed"),
+        );
+
+        // After dispute: must return true
+        assert!(client.has_dispute(&player_id, &milestone_index));
+    }
+
+    /// `has_dispute` returns `false` for a `(player_id, milestone_index)` pair
+    /// that was never disputed, even when other pairs have disputes.
+    #[test]
+    fn test_has_dispute_false_for_undisputed_milestone() {
+        let (env, client) = setup();
+        let admin = Address::generate(&env);
+        client.initialize(&admin);
+
+        let validator = Address::generate(&env);
+        client.register_validator(&validator, &String::from_str(&env, "UEFA-B-License"));
+
+        let player_wallet = Address::generate(&env);
+
+        // Approve two milestones for player 1
+        client.approve_milestone(
+            &validator,
+            &1u64,
+            &String::from_str(&env, "Milestone one"),
+            &String::from_str(&env, VALID_CID_V0),
+        );
+        client.approve_milestone(
+            &validator,
+            &1u64,
+            &String::from_str(&env, "Milestone two"),
+            &String::from_str(&env, VALID_CID_V1),
+        );
+
+        // Dispute only the first milestone
+        client.dispute_milestone(
+            &player_wallet,
+            &1u64,
+            &1u32,
+            &String::from_str(&env, "Disputed"),
+        );
+
+        // The disputed milestone returns true
+        assert!(client.has_dispute(&1u64, &1u32));
+        // The undisputed milestone returns false
+        assert!(!client.has_dispute(&1u64, &2u32));
+        // A completely unknown player/index also returns false
+        assert!(!client.has_dispute(&999u64, &1u32));
+    }
 
     /// Test that register_validator fails when called with an already-registered wallet.
     ///
