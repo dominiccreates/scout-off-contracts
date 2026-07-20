@@ -11,6 +11,8 @@ use types::{
 
 use soroban_sdk::{contract, contractimpl, Address, Env, String, Vec};
 
+use scoutchain_shared_types::require_admin;
+
 // Generated client stub for the progress contract — used to resolve a player's
 // current level at read time.  `level` is never stored in this contract.
 mod progress_contract {
