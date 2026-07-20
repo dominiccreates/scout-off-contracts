@@ -836,6 +836,23 @@ stellar contract invoke --id $VERIFICATION_CONTRACT_ID -- get_active_validator_c
 
 ---
 
+#### `get_active_disputes_count() -> u32`
+
+Return the number of currently active (unresolved) disputes across all
+players and milestones. The count is incremented on every `dispute_milestone`
+call and should be decremented once a dispute-resolution function exists.
+
+| | |
+|---|---|
+| **Auth** | None |
+| **Errors** | None |
+
+```bash
+stellar contract invoke --id $VERIFICATION_CONTRACT_ID -- get_active_disputes_count
+```
+
+---
+
 #### `get_global_milestone_index(offset: u32, limit: u32) -> GlobalMilestoneIndexPage`
 
 Return a page of the global milestone index — a rolling log of the most
