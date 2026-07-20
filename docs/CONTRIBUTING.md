@@ -53,6 +53,7 @@ cargo fmt --all -- --check      # formatting must be clean
 - [ ] Cross-contract calls are documented with a comment explaining the atomicity guarantee
 - [ ] `ai.md` is updated if shared types, events, or env vars changed
 - [ ] `docs/CONTRACT_REFERENCE.md` is updated with new functions
+- [ ] Any PR classified as a MINOR or MAJOR contract change under the policy in [docs/VERSIONING.md](VERSIONING.md) adds or updates the appropriate entry in [CHANGELOG.md](../CHANGELOG.md)
 
 ### Error variant ordering
 

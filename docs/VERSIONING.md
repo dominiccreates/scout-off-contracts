@@ -100,6 +100,4 @@ Error code assignments for v0.1.0 are fixed as documented in [docs/CONTRACT_REFE
 
 ## Version History
 
-| Version | Date | Summary |
-|---------|------|---------|
-| v0.1.0 | 2025 | Initial release — all four contracts with full test coverage |
+The root-level [CHANGELOG.md](../CHANGELOG.md) is the single source of truth for human-readable version history and release summaries. The historical v0.1.0 entry is recorded there, and future release notes should be maintained there instead of in this policy file.
