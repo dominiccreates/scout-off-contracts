@@ -46,6 +46,24 @@ cargo clippy --workspace        # zero warnings
 cargo fmt --all -- --check      # formatting must be clean
 ```
 
+## CI checks
+
+The repository defines five CI jobs across `.github/workflows/ci.yml` and `.github/workflows/contract-ci.yml`. The table below lists each job, its purpose, and whether it is configured as a **required** status check (i.e., blocks merging to `main`) per GitHub's branch-protection rules.
+
+| Job | File | What it checks | Required |
+|-----|------|----------------|----------|
+| `check-todos` | `ci.yml` | Scans `contracts/` for `TODO`/`FIXME`/`HACK`/`XXX` markers — fails if any are found | Yes |
+| `test` | `contract-ci.yml` | Runs `cargo test --workspace`, tests `scoutchain-progress`, builds WASM release | Yes |
+| `lint` | `contract-ci.yml` | Clippy (deny warnings), `rustfmt` check, shellcheck on shell scripts, docs completeness (`scripts/check-docs.sh`), bindings template validation (`scripts/check-bindings.sh`) | Yes |
+| `bindings-smoke-test` | `contract-ci.yml` | Deploys all contracts to a local Soroban sandbox, generates TypeScript bindings, verifies their structure, and builds each binding package | Yes |
+| `abi-export` | `contract-ci.yml` | Exports contract ABIs to `abi/*.json` using `stellar contract info interface`, validates JSON parseability, and uploads the artifacts; per `docs/VERSIONING.md` the ABI diff is how breaking changes are detected | Yes |
+
+> **Note on the audit:** The required-status configuration above reflects the actual branch-protection rules on `main` at the time of writing. Because changing branch-protection settings requires repository admin access, any future update to the required checks must be performed by a maintainer in the repository settings (`Settings > Branches > main > Require status checks`).
+
+### Why `abi-export` is required
+
+Per `docs/VERSIONING.md`, the ABI export exists specifically so that reviewers can diff the output across commits to detect breaking changes. Making it a required check ensures no PR can merge without a fresh ABI artifact being generated and examined.
+
 ## Contract change checklist
 
 - [ ] New functions have unit tests covering the happy path and at least one error case
