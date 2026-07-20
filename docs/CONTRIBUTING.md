@@ -33,7 +33,7 @@ The `wasm32v1-none` target (not the older `wasm32-unknown-unknown`) is required 
 ## Setup
 
 ```bash
-rustup target add wasm32-unknown-unknown
+rustup target add wasm32v1-none
 rustup component add clippy rustfmt
 cp .env.example .env
 ```
