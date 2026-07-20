@@ -1022,6 +1022,7 @@ stellar contract invoke --id $VERIFICATION_CONTRACT_ID -- version
 | `milestone_approved` | event_name, validator_address, milestone_index (u32) | player_id (u64), description (String), evidence_hash (String) | Validator confirms a player achievement |
 | `validator_registered` | event_name | validator_address | New validator onboarded |
 | `validator_revoked` | event_name | validator_address, reason (String) | Validator deactivated |
+| `milestone_disputed` | event_name, player_id (u64), milestone_index (u32) | reason (String) | Player disputes a milestone attribution |
 | `progress_contract_updated` | event_name | new_address (Address) | Progress contract re-wired |
 | `contract_paused` | event_name | admin (Address) | Circuit breaker engaged |
 | `contract_unpaused` | event_name | admin (Address) | Circuit breaker released |
