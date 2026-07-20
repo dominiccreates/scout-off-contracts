@@ -1,3 +1,5 @@
+# Full build, test, lint, bindings, and sandbox pipeline; see ci.yml for the
+# separate fast, dependency-free TODO/FIXME/HACK static check.
 name: Soroban Contract CI
 
 on:
@@ -299,4 +301,3 @@ jobs:
           name: contract-abis-${{ github.sha }}
           path: abi/*.json
           if-no-files-found: error
-
