@@ -6,7 +6,7 @@ Ensure the following tools are installed at the specified minimum versions befor
 
 | Tool | Minimum version | Install / notes |
 |------|----------------|-----------------|
-| **Rust** (via rustup) | stable (1.78+) | `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \| sh` |
+| **Rust** (via rustup) | pinned in `rust-toolchain.toml` | `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \| sh` |
 | **WASM build target** | `wasm32v1-none` | `rustup target add wasm32v1-none` |
 | **cargo** | ships with Rust stable | Verify: `cargo --version` |
 | **clippy** | ships with Rust stable | `rustup component add clippy` |
@@ -15,7 +15,7 @@ Ensure the following tools are installed at the specified minimum versions befor
 | **Node.js** | 20 LTS | Required only for TypeScript bindings generation — `./scripts/generate-bindings.sh` |
 | **npm** | 10+ (ships with Node 20) | Required only for building/testing bindings packages |
 
-> CI uses `dtolnay/rust-toolchain@stable` and installs `stellar-cli` at the pinned version listed above. If a local build diverges from CI, update your Rust toolchain (`rustup update stable`) and reinstall stellar-cli at the pinned version.
+> The repository includes `rust-toolchain.toml`, so `rustup` automatically selects the same pinned Rust version, `wasm32v1-none` target, and formatter/linter components used by CI whenever you run `cargo` or `rustup` from this directory. If a local build diverges from CI, reinstall stellar-cli at the pinned version.
 
 ### Installing the pinned stellar-cli version
 
@@ -33,7 +33,7 @@ The `wasm32v1-none` target (not the older `wasm32-unknown-unknown`) is required 
 ## Setup
 
 ```bash
-rustup target add wasm32-unknown-unknown
+rustup show
 rustup component add clippy rustfmt
 cp .env.example .env
 ```
