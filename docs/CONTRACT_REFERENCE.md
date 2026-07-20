@@ -844,7 +844,7 @@ stellar contract invoke --id $VERIFICATION_CONTRACT_ID -- get_active_validator_c
 
 Return the number of currently active (unresolved) disputes across all
 players and milestones. The count is incremented on every `dispute_milestone`
-call and should be decremented once a dispute-resolution function exists.
+call and decremented when `resolve_dispute` marks a dispute resolved.
 
 | | |
 |---|---|
@@ -918,9 +918,9 @@ stellar contract invoke --id $VERIFICATION_CONTRACT_ID \
 #### `dispute_milestone(player_wallet: Address, player_id: u64, milestone_index: u32, reason: String) -> Result<(), VerificationError>`
 
 Allow a player to dispute a milestone they believe was wrongly attributed.
-Only the player associated with `player_id` may submit a dispute, and only
-one dispute may be open per `(player_id, milestone_index)` pair. Emits a
-`milestone_disputed` event.
+Only the player associated with `player_id` may submit a dispute. A new dispute
+is stored as `resolved: false` and `upheld: false`. Only one dispute record may
+exist per `(player_id, milestone_index)` pair. Emits a `milestone_disputed` event.
 
 | | |
 |---|---|
@@ -938,11 +938,31 @@ stellar contract invoke --id $VERIFICATION_CONTRACT_ID \
 
 ---
 
+#### `resolve_dispute(player_id: u64, milestone_index: u32, upheld: bool) -> Result<(), VerificationError>`
+
+Admin-only review action for a filed milestone dispute. Marks the stored
+`MilestoneDispute` as `resolved: true`, records the admin's outcome in `upheld`,
+decrements `get_active_disputes_count()`, and emits a `dispute_resolved` event.
+This function deliberately does not roll back player progress when `upheld` is
+true; that corrective workflow is tracked separately.
+
+| | |
+|---|---|
+| **Auth** | Admin must sign |
+| **Errors** | `ContractPaused` · `NotInitialized` · `Unauthorized` · `MilestoneNotFound` (no dispute recorded) · `DisputeAlreadyResolved` |
+
+```bash
+stellar contract invoke --id $VERIFICATION_CONTRACT_ID \
+  -- resolve_dispute --player_id 1 --milestone_index 1 --upheld false
+```
+
+---
+
 #### `get_dispute(player_id: u64, milestone_index: u32) -> Result<MilestoneDispute, VerificationError>`
 
 Read a milestone dispute by `(player_id, milestone_index)`. `MilestoneDispute`
-has `player_id: u64`, `milestone_index: u32`, `reason: String`, and
-`disputed_at: u64`.
+has `player_id: u64`, `milestone_index: u32`, `reason: String`,
+`disputed_at: u64`, `resolved: bool`, and `upheld: bool`.
 
 | | |
 |---|---|
@@ -2038,6 +2058,8 @@ pub struct MilestoneDispute {
     pub milestone_index: u32,
     pub reason: String,
     pub disputed_at: u64,       // Unix seconds
+    pub resolved: bool,         // false until admin resolves the dispute
+    pub upheld: bool,           // admin outcome; meaningful once resolved is true
 }
 ```
 
@@ -2161,6 +2183,7 @@ pub struct TrialOffer {
 | 15 | `ValidatorCapReached` | 100-validator limit reached; contract upgrade required to raise the cap |
 | 16 | `DuplicateEvidence` | Evidence hash has already been used in a prior `approve_milestone` call |
 | 17 | `MilestoneLimitExceeded` | Validator has already approved 5 milestones for this player |
+| 18 | `DisputeAlreadyResolved` | Dispute was already resolved and cannot be resolved again |
 
 ### `ProgressError` (progress contract)
 

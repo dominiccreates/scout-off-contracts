@@ -1,5 +1,5 @@
-use soroban_sdk::contracterror;
 use scoutchain_shared_types::AdminError;
+use soroban_sdk::contracterror;
 
 /// Append-only: do not renumber existing variants. See docs/CONTRIBUTING.md.
 #[contracterror]
@@ -39,6 +39,8 @@ pub enum VerificationError {
     DuplicateEvidence = 16,
     /// Validator has already approved 5 milestones for this player.
     MilestoneLimitExceeded = 17,
+    /// Dispute was already resolved and cannot be resolved again.
+    DisputeAlreadyResolved = 18,
 
     // ── Input validation ──
     /// Bad evidence hash or credentials too long.
