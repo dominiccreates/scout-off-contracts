@@ -46,6 +46,56 @@ cargo clippy --workspace        # zero warnings
 cargo fmt --all -- --check      # formatting must be clean
 ```
 
+### CI jobs: what you can check locally
+
+`docs/CONTRIBUTING.md` only lists three commands above, but CI actually runs
+five jobs. The table below covers all five, and whether you can catch their
+failures before you push.
+
+| CI job | What it checks | Locally reproducible? | Command(s) |
+|---|---|---|---|
+| `check-todos` | Blocks `TODO`/`FIXME`/`HACK`/`XXX` markers in `contracts/**/*.rs` | ✅ Yes | `grep -rIn -E '\b(TODO\|FIXME\|HACK\|XXX)\b' contracts/ --include='*.rs'` |
+| `test` | Full workspace test suite, an extra verbose run of the `progress` contract's tests, and a release WASM build | ✅ Yes (already listed above) | `cargo test --workspace` (optionally also `cargo build --workspace --target wasm32v1-none --release`) |
+| `lint` | Clippy (zero warnings), `rustfmt --check`, `shellcheck` on every script in `scripts/` and `testnet/seed.sh`, a docs-completeness check, and bindings `package.json` template validation | ✅ Yes | `cargo clippy --workspace -- -D warnings` · `cargo fmt --all -- --check` · `shellcheck scripts/*.sh testnet/seed.sh` (requires `shellcheck` installed) · `bash scripts/check-docs.sh` · `bash scripts/check-bindings.sh` |
+| `bindings-smoke-test` | Boots a Dockerized local Soroban sandbox (`stellar/quickstart:testing`), deploys all four contracts to it, then generates and builds the TypeScript bindings packages against that live deployment | ⚠️ CI-only in practice | Technically reproducible if you have Docker — see below — but the setup cost (Docker, a *second* pinned Stellar CLI version, funding a sandbox identity) makes it impractical to run on every push. Most contributors should treat this as CI-only feedback. |
+| `abi-export` | Builds release WASM and exports each contract's ABI as JSON via `stellar contract info interface`, then validates the JSON parses | ✅ Partially | `cargo build --workspace --target wasm32v1-none --release`, then for each contract: `stellar contract info interface --wasm target/wasm32v1-none/release/scoutchain_<contract>.wasm --output json-formatted`. The artifact upload (for diffing ABIs across commits) is GitHub Actions storage with no local equivalent, but you don't need it to self-verify — just check the printed JSON for unexpected changes. |
+
+#### Reproducing `bindings-smoke-test` locally (optional)
+
+This job requires Docker and, importantly, a **different pinned Stellar CLI
+version (25.2.0)** than the 21.6.0 pinned above for everyday development —
+installing both side by side is extra friction most contributors won't want
+for routine PRs. If you do want to reproduce it:
+
+```bash
+# 1. Build release WASM
+cargo build --workspace --target wasm32v1-none --release
+
+# 2. Install the CLI version this job actually uses (25.2.0, not 21.6.0)
+curl -sSL https://raw.githubusercontent.com/stellar/stellar-cli/v25.2.0/install.sh | bash
+
+# 3. Start a local Soroban sandbox
+docker run -d --name stellar-local -p 8000:8000 stellar/quickstart:testing --local
+
+# 4. Register the local network, then generate + fund a deployer identity
+stellar network add local \
+  --rpc-url http://localhost:8000/soroban/rpc \
+  --network-passphrase "Standalone Network ; February 2017"
+stellar keys generate ci-deployer --network local
+stellar keys fund ci-deployer --network local
+
+# 5. Deploy each contract (see the deploy_one() loop in
+#    .github/workflows/contract-ci.yml for the exact build/optimize/deploy
+#    steps), then generate and build the bindings
+bash scripts/generate-bindings.sh local
+
+# 6. Tear down
+docker stop stellar-local && docker rm stellar-local
+```
+
+Given the setup cost, it's reasonable to skip this locally and rely on CI's
+`bindings-smoke-test` run for this specific feedback.
+
 ## Contract change checklist
 
 - [ ] New functions have unit tests covering the happy path and at least one error case
