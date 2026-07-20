@@ -8,6 +8,7 @@ pub const CONTRACT_PAUSED: &str = "contract_paused";
 pub const CONTRACT_UNPAUSED: &str = "contract_unpaused";
 pub const CONTRACT_INITIALIZED: &str = "contract_initialized";
 pub const PROGRESS_CONTRACT_UPDATED: &str = "progress_contract_updated";
+pub const DISPUTE_RESOLVED: &str = "dispute_resolved";
 
 pub fn milestone_approved(
     env: &Env,
@@ -84,5 +85,17 @@ pub fn milestone_disputed(env: &Env, player_id: u64, milestone_index: u32, _reas
             milestone_index,
         ),
         (),
+    );
+}
+
+/// Emitted when an admin resolves a milestone dispute.
+pub fn dispute_resolved(env: &Env, player_id: u64, milestone_index: u32, upheld: bool) {
+    env.events().publish(
+        (
+            Symbol::new(env, "dispute_resolved"),
+            player_id,
+            milestone_index,
+        ),
+        upheld,
     );
 }

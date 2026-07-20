@@ -903,6 +903,8 @@ impl VerificationContract {
             milestone_index,
             reason: reason.clone(),
             disputed_at: env.ledger().timestamp(),
+            resolved: false,
+            upheld: false,
         };
 
         env.storage().persistent().set(&dispute_key, &dispute);
@@ -918,6 +920,50 @@ impl VerificationContract {
         );
 
         events::milestone_disputed(&env, player_id, milestone_index, &reason);
+        Ok(())
+    }
+
+    /// Resolve a filed milestone dispute (admin only).
+    ///
+    /// This marks the dispute as resolved and records whether the admin upheld
+    /// it. It does not roll back player progress; that corrective workflow is
+    /// intentionally handled separately.
+    pub fn resolve_dispute(
+        env: Env,
+        player_id: u64,
+        milestone_index: u32,
+        upheld: bool,
+    ) -> Result<(), VerificationError> {
+        Self::bump_instance_ttl(&env);
+        Self::require_not_paused(&env)?;
+        require_admin(&env, &DataKey::Admin, ADMIN_BUMP_LEDGERS)?;
+
+        let dispute_key = DataKey::MilestoneDispute(player_id, milestone_index);
+        let mut dispute: MilestoneDispute = env
+            .storage()
+            .persistent()
+            .get(&dispute_key)
+            .ok_or(VerificationError::MilestoneNotFound)?;
+
+        if dispute.resolved {
+            return Err(VerificationError::DisputeAlreadyResolved);
+        }
+
+        dispute.resolved = true;
+        dispute.upheld = upheld;
+        env.storage().persistent().set(&dispute_key, &dispute);
+
+        let count: u32 = env
+            .storage()
+            .instance()
+            .get(&DataKey::ActiveDisputesCount)
+            .unwrap_or(0u32);
+        env.storage().instance().set(
+            &DataKey::ActiveDisputesCount,
+            &count.checked_sub(1).ok_or(VerificationError::Overflow)?,
+        );
+
+        events::dispute_resolved(&env, player_id, milestone_index, upheld);
         Ok(())
     }
 
@@ -965,7 +1011,6 @@ impl VerificationContract {
         }
         Ok(())
     }
-
 
     fn require_not_paused(env: &Env) -> Result<(), VerificationError> {
         if env
@@ -1023,10 +1068,7 @@ mod tests {
         client.initialize(&admin);
 
         let validator = Address::generate(&env);
-        client.register_validator(
-            &validator,
-            &String::from_str(&env, "Academy Director"),
-        );
+        client.register_validator(&validator, &String::from_str(&env, "Academy Director"));
 
         // Use distinct players and evidence CIDs so the history exceeds the
         // 50-entry page cap through the normal approval path.
@@ -2099,6 +2141,121 @@ mod tests {
         assert!(result.is_err());
         // Count must remain 1
         assert_eq!(client.get_active_disputes_count(), 1);
+    }
+
+    #[test]
+    fn test_resolve_dispute_marks_resolved_and_decrements_active_count() {
+        let (env, client) = setup();
+        let admin = Address::generate(&env);
+        client.initialize(&admin);
+
+        let validator = Address::generate(&env);
+        client.register_validator(&validator, &String::from_str(&env, "UEFA-B-License"));
+
+        let player_wallet = Address::generate(&env);
+        client.approve_milestone(
+            &validator,
+            &1u64,
+            &String::from_str(&env, "m1"),
+            &String::from_str(&env, VALID_CID_V0),
+        );
+        client.dispute_milestone(
+            &player_wallet,
+            &1u64,
+            &1u32,
+            &String::from_str(&env, "Wrong attribution"),
+        );
+        assert_eq!(client.get_active_disputes_count(), 1);
+
+        client.resolve_dispute(&1u64, &1u32, &true);
+
+        let dispute = client.get_dispute(&1u64, &1u32);
+        assert!(dispute.resolved);
+        assert!(dispute.upheld);
+        assert_eq!(client.get_active_disputes_count(), 0);
+    }
+
+    #[test]
+    fn test_resolve_dispute_emits_event() {
+        let (env, client) = setup();
+        let admin = Address::generate(&env);
+        client.initialize(&admin);
+
+        let validator = Address::generate(&env);
+        client.register_validator(&validator, &String::from_str(&env, "UEFA-B-License"));
+
+        let player_wallet = Address::generate(&env);
+        client.approve_milestone(
+            &validator,
+            &2u64,
+            &String::from_str(&env, "m1"),
+            &String::from_str(&env, VALID_CID_V0),
+        );
+        client.dispute_milestone(
+            &player_wallet,
+            &2u64,
+            &1u32,
+            &String::from_str(&env, "Wrong attribution"),
+        );
+
+        client.resolve_dispute(&2u64, &1u32, &false);
+
+        let events = env.events().all();
+        assert_eq!(
+            events,
+            soroban_sdk::vec![
+                &env,
+                (
+                    client.address.clone(),
+                    (
+                        Symbol::new(&env, crate::events::DISPUTE_RESOLVED),
+                        2u64,
+                        1u32
+                    )
+                        .into_val(&env),
+                    false.into_val(&env)
+                )
+            ]
+        );
+    }
+
+    #[test]
+    fn test_resolve_dispute_missing_returns_milestone_not_found() {
+        let (_env, client) = setup();
+        let admin = Address::generate(&_env);
+        client.initialize(&admin);
+
+        let result = client.try_resolve_dispute(&99u64, &1u32, &false);
+        assert_eq!(result, Err(Ok(VerificationError::MilestoneNotFound)));
+    }
+
+    #[test]
+    fn test_resolve_dispute_already_resolved_returns_error() {
+        let (env, client) = setup();
+        let admin = Address::generate(&env);
+        client.initialize(&admin);
+
+        let validator = Address::generate(&env);
+        client.register_validator(&validator, &String::from_str(&env, "UEFA-B-License"));
+
+        let player_wallet = Address::generate(&env);
+        client.approve_milestone(
+            &validator,
+            &3u64,
+            &String::from_str(&env, "m1"),
+            &String::from_str(&env, VALID_CID_V0),
+        );
+        client.dispute_milestone(
+            &player_wallet,
+            &3u64,
+            &1u32,
+            &String::from_str(&env, "Wrong attribution"),
+        );
+        client.resolve_dispute(&3u64, &1u32, &true);
+
+        let result = client.try_resolve_dispute(&3u64, &1u32, &false);
+        assert_eq!(result, Err(Ok(VerificationError::DisputeAlreadyResolved)));
+        assert_eq!(client.get_active_disputes_count(), 0);
     }
 
     // -------------------------------------------------------------------------
