@@ -1,6 +1,7 @@
 # ScoutChain
 
-[![Soroban Contract CI](https://github.com/your-org/scoutchain/actions/workflows/contract-ci.yml/badge.svg)](https://github.com/your-org/scoutchain/actions/workflows/contract-ci.yml)
+[![Soroban Contract CI](https://github.com/scout-off/scout-off-contracts/actions/workflows/contract-ci.yml/badge.svg)](https://github.com/scout-off/scout-off-contracts/actions/workflows/contract-ci.yml)
+[![CI](https://github.com/scout-off/scout-off-contracts/actions/workflows/ci.yml/badge.svg)](https://github.com/scout-off/scout-off-contracts/actions/workflows/ci.yml)
 
 Core Soroban (Rust) smart contracts powering the Scouting Platform on the Stellar network. Manages decentralized talent identities, maps tamper-proof progress metrics, handles validator verification signatures, and governs scout platform access.
 
