@@ -72,6 +72,7 @@ The upgrade procedure is implemented in `scripts/upgrade.sh` (see [docs/DEPLOYME
 
 - [ ] Call `version()` on each upgraded contract to confirm the expected new version
 - [ ] Re-verify instance storage (fee config, contract links) — re-apply if values were wiped
+- [ ] Verify cross-contract wiring: `./scripts/verify-cross-contract-wiring.sh <network>`
 - [ ] Re-run cross-contract wiring if any contract was re-deployed from scratch: `./scripts/initialize.sh <network>`
 - [ ] Regenerate TypeScript bindings: `./scripts/generate-bindings.sh <network>`
 - [ ] Update backend and frontend repos with the new bindings
