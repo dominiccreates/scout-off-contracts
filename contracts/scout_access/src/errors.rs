@@ -1,4 +1,5 @@
 use soroban_sdk::contracterror;
+use scoutchain_shared_types::AdminError;
 
 /// Errors for the ScoutAccess contract.
 ///
@@ -61,4 +62,10 @@ pub enum ScoutAccessError {
     Overflow = 10,
     /// Cross-contract `advance_level` failed.
     ProgressCallFailed = 14,
+}
+
+impl AdminError for ScoutAccessError {
+    fn not_initialized() -> Self {
+        ScoutAccessError::NotInitialized
+    }
 }
