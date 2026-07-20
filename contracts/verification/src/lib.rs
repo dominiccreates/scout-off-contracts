@@ -87,6 +87,9 @@ impl VerificationContract {
         env.storage()
             .instance()
             .set(&DataKey::ActiveValidatorCount, &0u32);
+        env.storage()
+            .instance()
+            .set(&DataKey::ActiveDisputesCount, &0u32);
         events::contract_initialized(&env, &admin);
         Ok(())
     }
@@ -714,6 +717,13 @@ impl VerificationContract {
             .unwrap_or(0u32)
     }
 
+    pub fn get_active_disputes_count(env: Env) -> u32 {
+        env.storage()
+            .instance()
+            .get(&DataKey::ActiveDisputesCount)
+            .unwrap_or(0u32)
+    }
+
     pub fn get_global_milestone_index(
         env: Env,
         offset: u32,
@@ -845,6 +855,16 @@ impl VerificationContract {
         };
 
         env.storage().persistent().set(&dispute_key, &dispute);
+
+        let count: u32 = env
+            .storage()
+            .instance()
+            .get(&DataKey::ActiveDisputesCount)
+            .unwrap_or(0u32);
+        env.storage().instance().set(
+            &DataKey::ActiveDisputesCount,
+            &count.checked_add(1).ok_or(VerificationError::Overflow)?,
+        );
 
         events::milestone_disputed(&env, player_id, milestone_index, &reason);
         Ok(())
@@ -1885,6 +1905,104 @@ mod tests {
             client.get_validator_milestone_count(&validator),
             validator_count_before
         );
+    }
+
+    // -------------------------------------------------------------------------
+    // get_active_disputes_count tests (#663)
+    // -------------------------------------------------------------------------
+
+    /// Count starts at 0 before any disputes are filed.
+    #[test]
+    fn test_active_disputes_count_starts_at_zero() {
+        let (env, client) = setup();
+        let admin = Address::generate(&env);
+        client.initialize(&admin);
+
+        assert_eq!(client.get_active_disputes_count(), 0);
+    }
+
+    /// Count increases by 1 for each new dispute on the same milestone.
+    #[test]
+    fn test_active_disputes_count_increments_on_dispute() {
+        let (env, client) = setup();
+        let admin = Address::generate(&env);
+        client.initialize(&admin);
+
+        let validator = Address::generate(&env);
+        client.register_validator(&validator, &String::from_str(&env, "UEFA-B-License"));
+
+        let player_wallet = Address::generate(&env);
+
+        client.approve_milestone(
+            &validator,
+            &1u64,
+            &String::from_str(&env, "m1"),
+            &String::from_str(&env, VALID_CID_V0),
+        );
+        client.approve_milestone(
+            &validator,
+            &2u64,
+            &String::from_str(&env, "m2"),
+            &String::from_str(&env, VALID_CID_V0_2),
+        );
+
+        assert_eq!(client.get_active_disputes_count(), 0);
+
+        client.dispute_milestone(
+            &player_wallet,
+            &1u64,
+            &1u32,
+            &String::from_str(&env, "Wrong attribution"),
+        );
+        assert_eq!(client.get_active_disputes_count(), 1);
+
+        client.dispute_milestone(
+            &player_wallet,
+            &2u64,
+            &1u32,
+            &String::from_str(&env, "Also wrong"),
+        );
+        assert_eq!(client.get_active_disputes_count(), 2);
+    }
+
+    /// Count is not affected by dispute_milestone on the same (player, index) —
+    /// the duplicate is rejected before the counter increments.
+    #[test]
+    fn test_active_disputes_count_not_incremented_on_duplicate_dispute() {
+        let (env, client) = setup();
+        let admin = Address::generate(&env);
+        client.initialize(&admin);
+
+        let validator = Address::generate(&env);
+        client.register_validator(&validator, &String::from_str(&env, "UEFA-B-License"));
+
+        let player_wallet = Address::generate(&env);
+
+        client.approve_milestone(
+            &validator,
+            &1u64,
+            &String::from_str(&env, "m1"),
+            &String::from_str(&env, VALID_CID_V0),
+        );
+
+        client.dispute_milestone(
+            &player_wallet,
+            &1u64,
+            &1u32,
+            &String::from_str(&env, "First dispute"),
+        );
+        assert_eq!(client.get_active_disputes_count(), 1);
+
+        // Second dispute on the same (player, index) should fail
+        let result = client.try_dispute_milestone(
+            &player_wallet,
+            &1u64,
+            &1u32,
+            &String::from_str(&env, "Second attempt"),
+        );
+        assert!(result.is_err());
+        // Count must remain 1
+        assert_eq!(client.get_active_disputes_count(), 1);
     }
 
     // -------------------------------------------------------------------------
