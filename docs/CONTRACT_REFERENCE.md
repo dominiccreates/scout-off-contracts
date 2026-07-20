@@ -18,6 +18,7 @@ That keeps the command copy-paste-runnable in a standard `bash`/`zsh` shell.
 - [Shared Types](#shared-types)
 - [Error Codes](#error-codes)
 - [Events](#events)
+- [Design Discussion: Check-Ordering Follow-ups](#design-discussion-check-ordering-follow-ups)
 - [Glossary](GLOSSARY.md)
 
 ---
@@ -1701,7 +1702,7 @@ true, the first matching check in this list wins):
 > subscription lookup returns `ScoutNotSubscribed` before any write occurs), but
 > callers should not rely on this indirect guard — a dedicated initialized check
 > would be safer and consistent. This should be addressed in a follow-up
-> contract upgrade. Tracked as a follow-up in the design discussion below.
+> contract upgrade. See [Design Discussion §1](#1-log_trial_offer-is-missing-require_initialized).
 
 > **Design note — `InvalidInput` before subscription check (Priority 3 before 4)**:
 > `details_hash` is validated before the subscription is looked up. This means
@@ -2359,3 +2360,132 @@ pub struct TrialOffer {
 | `trial_offer_logged` | scout_access | Elite scout records a trial offer |
 | `fees_withdrawn` | scout_access | Admin withdraws accumulated fees |
 | `subscription_refunded` | scout_access | Admin issues emergency refund to a scout |
+
+---
+
+## Design Discussion: Check-Ordering Follow-ups
+
+This section collects ordering decisions that were identified during the
+check-precedence audit and flagged as candidates for review in a future
+contract upgrade. None of these represent bugs in the current release —
+all of them have documented, tested behavior — but some may produce a less
+helpful error than a different ordering would. Each item describes the
+current behavior, why it may be suboptimal, and the recommended change.
+
+---
+
+### 1. `log_trial_offer` is missing `require_initialized`
+
+**Current behavior**: `log_trial_offer` does not call `require_initialized`,
+unlike every other state-changing function in this contract (`subscribe`,
+`pay_to_contact`, and `batch_contact_players` all call it immediately after
+`require_not_paused`).
+
+**Why this matters**: On an uninitialized contract, `log_trial_offer` does not
+return `NotInitialized`. Instead it falls through to the subscription lookup,
+which returns `ScoutNotSubscribed` because no storage has been written. This
+means an uninitialized contract appears to a caller as if the scout simply
+has no subscription — an indirect, misleading error rather than the definitive
+"contract not set up" signal.
+
+**When it can surface**: Only on a freshly deployed contract that has never had
+`initialize` called. In production the initialize-then-use deployment flow
+makes this unlikely, but a mis-wired deployment or a test environment that
+calls `log_trial_offer` before `initialize` would observe `ScoutNotSubscribed`
+instead of `NotInitialized`.
+
+**Recommended fix**: Add `Self::require_initialized(&env)?;` immediately after
+`Self::require_not_paused(&env)?;` in `log_trial_offer`, matching the ordering
+of the other three state-changing functions. This is a one-line change, is
+backward-compatible (it makes an already-failing path fail with a more specific
+error), and requires no storage or API changes.
+
+```rust
+// Proposed change in log_trial_offer (contracts/scout_access/src/lib.rs):
+Self::bump_instance_ttl(&env);
+Self::require_not_paused(&env)?;
+Self::require_initialized(&env)?;   // ← add this line
+scout.require_auth();
+```
+
+**Risk**: None. On an initialized contract `require_initialized` always
+succeeds, so existing callers are unaffected.
+
+---
+
+### 2. `pay_to_contact`: `AlreadyContacted` checked before `ProContactLimitReached` (Priority 6 before 7)
+
+**Current behavior**: The duplicate-contact guard (`AlreadyContacted`) runs
+before the Pro monthly quota check (`ProContactLimitReached`). A scout who
+is simultaneously at their quota limit *and* has already contacted the same
+player sees `AlreadyContacted`.
+
+**Why this may be suboptimal**: `AlreadyContacted` (code 8) is the correct
+terminal error for a genuine duplicate contact attempt, so the ordering is
+correct for the pure-duplicate case. However, the quota check at Priority 7
+fires *only* for new contacts — if a scout at quota tries to contact a new
+player they will correctly see `ProContactLimitReached`. The current ordering
+is therefore only relevant when both the quota and a duplicate exist for the
+same `(scout, player_id)` pair. In that case `AlreadyContacted` is the more
+actionable response ("you already unlocked this player") and the quota is
+irrelevant. The current ordering is defensible.
+
+**Conclusion**: No change recommended. The ordering is correct and the
+"worse" scenario (quota masking duplicate) does not arise in practice because
+the quota check only runs for *new* contacts.
+
+---
+
+### 3. `batch_contact_players` vs `pay_to_contact`: different error codes for the same quota limit
+
+**Current behavior**: `batch_contact_players` returns `ContactQuotaExceeded`
+(18) when the Pro monthly limit would be exceeded, while `pay_to_contact`
+returns `ProContactLimitReached` (20) for the same underlying limit. Both
+enforce `pro_contact_limit` from `FeeConfig` but via different helper
+functions.
+
+**Why this matters for callers**: A frontend must handle two different error
+codes to display the same user-facing message ("You have reached your monthly
+contact limit, please upgrade to Elite or wait for your subscription to
+renew"). This is an accidental inconsistency introduced when `batch_contact_players`
+was added.
+
+**Recommended fix**: Unify on one error code. The preferred candidate is
+`ProContactLimitReached` (20) because it is the more descriptive name and was
+introduced specifically for this error class. `ContactQuotaExceeded` (18) can
+be deprecated and its slot reserved (see the code-13 reservation pattern
+already in use in `errors.rs`). This requires a contract upgrade and a
+coordinated frontend change.
+
+**Impact**: Any caller or frontend that currently checks for
+`ContactQuotaExceeded` (18) on `batch_contact_players` responses would need to
+be updated after the upgrade.
+
+---
+
+### 4. `subscribe`: UpgradeTooSoon fires even for a same-tier renewal
+
+**Current behavior**: the minimum 1-hour interval between `subscribe` calls
+(the `UpgradeTooSoon` guard) applies to any call while the subscription is
+active, including a renewal at exactly the same tier. A scout attempting to
+renew their Pro subscription 30 minutes after purchasing it sees `UpgradeTooSoon`.
+
+**Why this may be suboptimal**: The guard was introduced to prevent the
+race-condition / double-charge scenario on rapid upgrades. A same-tier renewal
+carries no race-condition risk because the tier does not change and the fee
+is deterministic. Applying the interval guard to same-tier renewals is a
+conservative over-application that can confuse users ("I'm just renewing,
+why is it saying too soon?").
+
+**Recommended fix**: Only apply the `UpgradeTooSoon` guard when the requested
+tier is a strict upgrade (i.e., `tier_rank(&tier) > tier_rank(&existing.tier)`).
+Same-tier renewals while active should only be rate-limited by the expiry
+logic, not the upgrade interval. This is a small conditional change within the
+existing `if now <= existing.expires_at` block.
+
+**Risk**: Low. Removing the interval guard for same-tier renewals means two
+identical-tier subscriptions *could* be purchased in rapid succession (paying
+double). However, this is self-penalizing (the scout pays twice for no
+benefit) and the new subscription simply overwrites the old one. The
+`refund_subscription` admin function already handles the accidental-double-charge
+recovery path.
