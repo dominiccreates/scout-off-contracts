@@ -52,7 +52,7 @@ cargo fmt --all -- --check      # formatting must be clean
 - [ ] Any new `DataKey` variant is documented with a comment
 - [ ] Cross-contract calls are documented with a comment explaining the atomicity guarantee
 - [ ] `ai.md` is updated if shared types, events, or env vars changed
-- [ ] `docs/CONTRACT_REFERENCE.md` is updated with new functions
+- [ ] `docs/CONTRACT_REFERENCE.md` is updated with new functions, events, and error codes *(enforced automatically by `scripts/check-docs.sh` in the CI lint job — the PR will fail if a `pub fn` from any `#[contractimpl]` block lacks a corresponding heading in the docs)*
 
 ### Error variant ordering
 
