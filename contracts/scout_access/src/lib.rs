@@ -2966,4 +2966,133 @@ mod tests {
             ]
         );
     }
+
+    // -------------------------------------------------------------------------
+    // Fee reconciliation: mixed-operation stress test
+    //
+    // Verifies that get_accumulated_fees() stays in exact sync with a manually
+    // maintained expected total across a mixed sequence of real-world operations,
+    // including the batch_contact_players skip/no-charge path for already-contacted
+    // players.  Also validates withdraw_fees() zeroes the accumulator.
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn test_fee_reconciliation_mixed_sequence() {
+        let (env, admin, xlm, _contract_id, client) = setup();
+        let fees = default_fees();
+
+        // Scout A subscribes Basic (Tier 1); Scout B subscribes Pro (Tier 2).
+        // Both need enough XLM for their subscription plus subsequent contacts.
+        // Scout A: 1 sub + 2 contacts (individual + batch new player) = 1_000_000 + 200_000
+        // Scout B: 1 sub + 1 contact = 3_000_000 + 100_000
+        let scout_a = Address::generate(&env);
+        let scout_b = Address::generate(&env);
+        mint_token(&env, &xlm, &admin, &scout_a, 5_000_000);
+        mint_token(&env, &xlm, &admin, &scout_b, 5_000_000);
+
+        // ----------------------------------------------------------------
+        // Step 1 — Subscriptions
+        // ----------------------------------------------------------------
+        client.subscribe(&scout_a, &SubscriptionTier::Basic);
+        client.subscribe(&scout_b, &SubscriptionTier::Pro);
+
+        let mut expected_fees: i128 = fees.basic_sub_stroops + fees.pro_sub_stroops;
+        // 1_000_000 + 3_000_000 = 4_000_000
+        assert_eq!(
+            client.get_accumulated_fees(),
+            expected_fees,
+            "fees after subscriptions"
+        );
+
+        // ----------------------------------------------------------------
+        // Step 2 — Individual contacts
+        // ----------------------------------------------------------------
+        // Player IDs used throughout the test.
+        let player_1: u64 = 1;
+        let player_2: u64 = 2;
+        let player_3: u64 = 3;
+
+        client.pay_to_contact(&scout_a, &player_1);
+        expected_fees += fees.contact_fee_stroops; // +100_000 → 4_100_000
+
+        client.pay_to_contact(&scout_b, &player_2);
+        expected_fees += fees.contact_fee_stroops; // +100_000 → 4_200_000
+
+        assert_eq!(
+            client.get_accumulated_fees(),
+            expected_fees,
+            "fees after individual contacts"
+        );
+
+        // ----------------------------------------------------------------
+        // Step 3 — Batch contact: Player 1 (already contacted, skip/no-charge)
+        //          + Player 3 (new, charged)
+        // ----------------------------------------------------------------
+        let mut batch = soroban_sdk::Vec::new(&env);
+        batch.push_back(player_1); // already contacted by scout_a → must be skipped
+        batch.push_back(player_3); // new → charged
+
+        let new_contacts = client.batch_contact_players(&scout_a, &batch);
+
+        // Exactly one new contact should have been recorded (Player 3 only).
+        assert_eq!(
+            new_contacts, 1,
+            "batch_contact_players must skip already-contacted Player 1 and only charge for Player 3"
+        );
+
+        // Only one contact fee should have been charged, not two.
+        expected_fees += fees.contact_fee_stroops; // +100_000 → 4_300_000
+
+        // ----------------------------------------------------------------
+        // Reconciliation Check #1 — accumulated fees must exactly match
+        // the independently maintained expected total.
+        // ----------------------------------------------------------------
+        // Expected breakdown:
+        //   Basic subscription (Scout A)  :   1_000_000
+        //   Pro subscription (Scout B)    :   3_000_000
+        //   Scout A contacts Player 1     :     100_000
+        //   Scout B contacts Player 2     :     100_000
+        //   Scout A batch, Player 3 only  :     100_000
+        //                                  -----------
+        //   Total                          :   4_300_000
+        assert_eq!(
+            client.get_accumulated_fees(),
+            expected_fees,
+            "Reconciliation Check #1 failed: accumulated fees do not match expected total. \
+             If this assertion fails it likely means batch_contact_players is charging for \
+             already-contacted (skipped) players — check the first-pass loop in lib.rs."
+        );
+        assert_eq!(
+            expected_fees, 4_300_000,
+            "sanity check: expected_fees constant cross-check"
+        );
+
+        // ----------------------------------------------------------------
+        // Step 4 — Withdrawal & Reset Check
+        // ----------------------------------------------------------------
+        let pre_withdrawal_total = client.get_accumulated_fees();
+        let recipient = Address::generate(&env);
+        let withdrawn = client.withdraw_fees(&recipient);
+
+        // Returned amount must equal the pre-withdrawal total.
+        assert_eq!(
+            withdrawn, pre_withdrawal_total,
+            "withdraw_fees must return the full accumulated total"
+        );
+
+        // Accumulator must drop to strictly 0 after withdrawal.
+        assert_eq!(
+            client.get_accumulated_fees(),
+            0,
+            "accumulated fees must be exactly 0 after withdraw_fees"
+        );
+
+        // Token balance of the recipient must equal what was withdrawn.
+        let token_client = TokenClient::new(&env, &xlm);
+        assert_eq!(
+            token_client.balance(&recipient),
+            withdrawn,
+            "recipient token balance must equal withdrawn amount"
+        );
+    }
 }
