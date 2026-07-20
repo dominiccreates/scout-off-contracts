@@ -23,6 +23,9 @@ Every `pub fn` in every `#[contractimpl]` block is documented here.
 Handles player and scout on-chain identity: registration, profile updates,
 deregistration, and discovery queries.
 
+Timestamp fields returned by this contract (`registered_at` and `updated_at`)
+are Unix seconds. See [Timestamp](GLOSSARY.md#timestamp).
+
 ### Functions
 
 ---
@@ -418,6 +421,9 @@ registration is permitted; duplicate prevention is enforced per role only.
 
 Manages the trusted validator registry and milestone approvals. Cross-calls
 `progress.advance_level` atomically when a milestone is approved.
+
+Timestamp fields returned by this contract (`registered_at`, `approved_at`, and
+`disputed_at`) are Unix seconds. See [Timestamp](GLOSSARY.md#timestamp).
 
 ### Functions
 
@@ -854,7 +860,8 @@ stellar contract invoke --id $VERIFICATION_CONTRACT_ID \
 
 Return the list of `(player_id, milestone_index)` references for every
 milestone `wallet` has approved. `MilestoneRef` has `player_id: u64` and
-`milestone_index: u32`.
+`milestone_index: u32`. This legacy method is unbounded; high-volume callers
+should use `get_validator_milestones_page` instead.
 
 | | |
 |---|---|
@@ -864,6 +871,25 @@ milestone `wallet` has approved. `MilestoneRef` has `player_id: u64` and
 ```bash
 stellar contract invoke --id $VERIFICATION_CONTRACT_ID \
   -- get_validator_milestones --wallet $VALIDATOR_ADDRESS
+```
+
+---
+
+#### `get_validator_milestones_page(wallet: Address, offset: u32, limit: u32) -> Vec<MilestoneRef>`
+
+Return a bounded page of `(player_id, milestone_index)` references for milestones
+approved by `wallet`. `offset` is zero-based and `limit` is capped at 50 entries,
+matching `get_global_milestone_index`. Returns an empty `Vec` when the offset is
+beyond the validator's approval history or `limit` is zero.
+
+| | |
+|---|---|
+| **Auth** | None |
+| **Errors** | None |
+
+```bash
+stellar contract invoke --id $VERIFICATION_CONTRACT_ID \
+  -- get_validator_milestones_page --wallet $VALIDATOR_ADDRESS --offset 0 --limit 50
 ```
 
 ---
@@ -962,6 +988,10 @@ stellar contract invoke --id $VERIFICATION_CONTRACT_ID -- version
 ---
 
 ## progress
+
+`ProgressEntry.updated_at` and the `since_timestamp` parameter are Unix
+seconds. `ProgressEntry.ledger_sequence` is instead a Soroban ledger sequence
+number, not a timestamp. See [Timestamp](GLOSSARY.md#timestamp).
 
 ### Functions
 
@@ -1098,7 +1128,9 @@ stellar contract invoke --id $PROGRESS_CONTRACT_ID \
 #### `get_history_entry(player_id: u64, index: u32) -> Result<ProgressEntry, ProgressError>`
 
 Read a specific history entry. Indices start at `1`. Each `ProgressEntry`
-includes `ledger_sequence: u32` for tamper-proof auditability.
+includes `updated_at` in Unix seconds and `ledger_sequence: u32`, the Soroban
+ledger sequence number at the time of the change (not a timestamp), for
+tamper-proof auditability.
 
 | | |
 |---|---|
@@ -1313,6 +1345,11 @@ Handles scout subscriptions, pay-to-contact flows, and trial offer logging.
 Fees are collected in XLM (stroops) and held in the contract until admin
 withdrawal.
 
+Absolute timestamp fields returned by this contract (`expires_at`,
+`subscribed_at`, `contacted_at`, `logged_at`, and `period_start`) are Unix
+seconds. `sub_duration_secs` is a duration in seconds, not a Unix timestamp.
+See [Timestamp](GLOSSARY.md#timestamp).
+
 ### `FeeConfig` Struct
 
 Primary configuration struct controlling all subscription and contact fees.
@@ -1325,7 +1362,7 @@ greater than zero; either function returns `InvalidInput` otherwise.
 | `basic_sub_stroops` | `i128` | stroops | > 0 | `1000000` (0.1 XLM) |
 | `pro_sub_stroops` | `i128` | stroops | > 0 | `3000000` (0.3 XLM) |
 | `elite_sub_stroops` | `i128` | stroops | > 0 | `7000000` (0.7 XLM) |
-| `sub_duration_secs` | `u64` | seconds | > 0 | `2592000` (30 days = 30 × 24 × 3600) |
+| `sub_duration_secs` | `u64` | duration in seconds (not a Unix timestamp) | > 0 | `2592000` (30 days = 30 × 24 × 3600) |
 
 **Validation rules:**
 - Every `i128` fee field must be > 0 (zero or negative → `InvalidInput` error code 15).
@@ -1916,8 +1953,8 @@ pub struct PlayerProfile {
     pub vitals: PlayerVitals,
     pub ipfs_hashes: Vec<String>, // 1–10 entries
     pub level: ProgressLevel,
-    pub registered_at: u64,
-    pub updated_at: u64,
+    pub registered_at: u64, // Unix seconds
+    pub updated_at: u64,    // Unix seconds
 }
 ```
 
@@ -1929,7 +1966,7 @@ pub struct ScoutProfile {
     pub wallet: Address,
     pub region: String,   // max 128 bytes
     pub verified: bool,
-    pub registered_at: u64,
+    pub registered_at: u64, // Unix seconds
 }
 ```
 
@@ -1939,7 +1976,7 @@ pub struct ScoutProfile {
 pub struct Validator {
     pub wallet: Address,
     pub credentials: String, // max 256 bytes
-    pub registered_at: u64,
+    pub registered_at: u64, // Unix seconds
     pub active: bool,
 }
 ```
@@ -1962,8 +1999,19 @@ pub struct Milestone {
     pub validator: Address,
     pub description: String,
     pub evidence_hash: String,  // IPFS Qm… or Arweave bafy…, 2–128 bytes
-    pub approved_at: u64,
-    pub ledger_sequence: u32,   // tamper-proof timestamp
+    pub approved_at: u64,       // Unix seconds
+    pub ledger_sequence: u32,   // Soroban ledger sequence number (not a timestamp)
+}
+```
+
+### `MilestoneDispute`
+
+```rust
+pub struct MilestoneDispute {
+    pub player_id: u64,
+    pub milestone_index: u32,
+    pub reason: String,
+    pub disputed_at: u64,       // Unix seconds
 }
 ```
 
@@ -1975,9 +2023,9 @@ pub struct ProgressEntry {
     pub old_level: ProgressLevel,
     pub new_level: ProgressLevel,
     pub updated_by: Address,
-    pub updated_at: u64,
+    pub updated_at: u64,        // Unix seconds
     pub milestone_ref: u32,     // links to verification contract index
-    pub ledger_sequence: u32,   // tamper-proof timestamp
+    pub ledger_sequence: u32,   // Soroban ledger sequence number (not a timestamp)
 }
 ```
 
@@ -1997,8 +2045,18 @@ pub enum SubscriptionTier {
 pub struct Subscription {
     pub scout: Address,
     pub tier: SubscriptionTier,
-    pub expires_at: u64,
-    pub subscribed_at: u64,
+    pub expires_at: u64,        // Unix seconds
+    pub subscribed_at: u64,     // Unix seconds
+}
+```
+
+### `ContactRecord`
+
+```rust
+pub struct ContactRecord {
+    pub player_id: u64,
+    pub scout: Address,
+    pub contacted_at: u64,      // Unix seconds
 }
 ```
 
@@ -2010,7 +2068,16 @@ pub struct FeeConfig {
     pub basic_sub_stroops: i128,     // must be > 0
     pub pro_sub_stroops: i128,       // must be > 0
     pub elite_sub_stroops: i128,     // must be > 0
-    pub sub_duration_secs: u64,      // must be > 0
+    pub sub_duration_secs: u64,      // duration in seconds, must be > 0 (not a Unix timestamp)
+}
+```
+
+### `ProContactPeriod`
+
+```rust
+pub struct ProContactPeriod {
+    pub period_start: u64,      // Unix seconds
+    pub count: u32,
 }
 ```
 
@@ -2021,7 +2088,7 @@ pub struct TrialOffer {
     pub player_id: u64,
     pub scout: Address,
     pub details_hash: String, // IPFS/Arweave CID
-    pub logged_at: u64,
+    pub logged_at: u64,         // Unix seconds
 }
 ```
 
