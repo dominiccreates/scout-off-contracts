@@ -402,7 +402,7 @@ Run it against your backend PostgreSQL instance:
 psql $DATABASE_URL -f migrations/001_initial_schema.sql
 ```
 
-
+The migration is idempotent and safe to re-run against an already-migrated database: every table and index uses `IF NOT EXISTS`, and the seed row uses `ON CONFLICT DO NOTHING`.
 
 1. **Player Onboarding**
    - Connect Freighter wallet via SEP-10
