@@ -107,6 +107,14 @@ Rationale and the full set of breaking-change rules live in
 
 Changes to validator registration, revocation, or milestone approval logic require explicit
 review from a second team member before merge — these are the trust anchors of the platform.
+The validator contract is covered by [`.github/CODEOWNERS`](../.github/CODEOWNERS), which
+requests review from the designated validator-logic owner for changes under
+`/contracts/verification/`.
+
+Repository administrators must enable **Require review from Code Owners** in the `main`
+branch-protection rule for this mapping to block merges. Before enabling that rule, confirm
+that the listed owner has the required write access and update the mapping if the authorized
+reviewer group changes.
 
 ## Glossary
 
