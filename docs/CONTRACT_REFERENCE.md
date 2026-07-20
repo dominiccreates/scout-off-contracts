@@ -5,6 +5,10 @@ Every `pub fn` in every `#[contractimpl]` block is documented here.
 
 ---
 
+All `stellar contract invoke` examples below pass `String` and enum arguments
+as JSON values wrapped in shell single quotes, for example `--tier '"Elite"'`.
+That keeps the command copy-paste-runnable in a standard `bash`/`zsh` shell.
+
 ## Table of Contents
 
 - [registration](#registration)
@@ -151,7 +155,7 @@ Scouts start as unverified (`verified: false`); call `verify_scout` to promote.
 stellar contract invoke --id $REGISTRATION_CONTRACT_ID \
   -- register_scout \
   --wallet $SCOUT_ADDRESS \
-  --region "West Africa"
+  --region '"West Africa"'
 ```
 
 ---
@@ -305,8 +309,8 @@ count. The index is maintained automatically on `register_player`,
 ```bash
 stellar contract invoke --id $REGISTRATION_CONTRACT_ID \
   -- filter_players \
-  --region "West Africa" \
-  --position "Forward" \
+  --region '"West Africa"' \
+  --position '"Forward"' \
   --min_level '"Unverified"'
 ```
 
@@ -491,7 +495,7 @@ The contract enforces a cap of **100 simultaneously registered validators**. Thi
 stellar contract invoke --id $VERIFICATION_CONTRACT_ID \
   -- register_validator \
   --wallet $VALIDATOR_ADDRESS \
-  --credentials "UEFA B License"
+  --credentials '"UEFA B License"'
 ```
 
 ---
@@ -595,8 +599,8 @@ stellar contract invoke --id $VERIFICATION_CONTRACT_ID \
   -- approve_milestone \
   --validator_wallet $VALIDATOR_ADDRESS \
   --player_id 1 \
-  --description "Scored 5 goals in Local Cup" \
-  --evidence_hash "QmEvidence123"
+  --description '"Scored 5 goals in Local Cup"' \
+  --evidence_hash '"QmEvidence123"'
 ```
 
 ---
@@ -886,7 +890,7 @@ stellar contract invoke --id $VERIFICATION_CONTRACT_ID \
   --player_wallet $PLAYER_ADDRESS \
   --player_id 1 \
   --milestone_index 1 \
-  --reason "Milestone not actually completed"
+  --reason '"Milestone not actually completed"'
 ```
 
 ---
@@ -1533,7 +1537,7 @@ stellar contract invoke --id $SCOUT_ACCESS_CONTRACT_ID \
   -- log_trial_offer \
   --scout $SCOUT_ADDRESS \
   --player_id 1 \
-  --details_hash "QmTrialOfferDetails"
+  --details_hash '"QmTrialOfferDetails"'
 ```
 
 ---
