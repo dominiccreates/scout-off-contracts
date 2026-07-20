@@ -28,6 +28,11 @@ pub enum ScoutAccessError {
     InvalidTier = 9,
     /// Scout attempted to downgrade to a cheaper tier while subscription is still active.
     SubscriptionDowngradeNotAllowed = 12,
+    // Code 13 is intentionally reserved and must not be reassigned. It was
+    // never assigned to a live variant but is held open to prevent future
+    // contributors from accidentally colliding with any external consumers
+    // that may already treat 13 as an expected (if undocumented) gap.
+    // See docs/VERSIONING.md — error-code compatibility.
     /// Scout attempted to upgrade/renew before the minimum interval elapsed.
     UpgradeTooSoon = 17,
 
@@ -54,7 +59,6 @@ pub enum ScoutAccessError {
     // ── Cross-contract & arithmetic ──
     /// Arithmetic overflow occurred.
     Overflow = 10,
-    // Numeric gap 11 → 14 is intentional (legacy reservation). Do not reuse.
     /// Cross-contract `advance_level` failed.
     ProgressCallFailed = 14,
 }
