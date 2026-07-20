@@ -1396,13 +1396,18 @@ See the [Glossary](GLOSSARY.md#feeconfig) for a plain-language description of ea
 
 #### `initialize(admin: Address, xlm_token: Address, fee_config: FeeConfig) -> Result<(), ScoutAccessError>`
 
-One-time contract setup. Validates that all fee fields are positive and
-`sub_duration_secs` is non-zero.
+One-time contract setup. Validates that `xlm_token` points at a deployed
+token contract by invoking `decimals()` on it, and that all fee fields
+are positive with `sub_duration_secs` non-zero. The token probe is
+read-only and side-effect-free; it exists so that a wrong `xlm_token`
+address (testnet SAC on mainnet, a typo, a plain account, or a
+non-token contract) is rejected immediately at deploy time rather than
+surfacing as an opaque failure on the first `subscribe()` call.
 
 | | |
 |---|---|
 | **Auth** | `admin` must sign |
-| **Errors** | `AlreadyInitialized` · `InvalidInput` (zero or negative fee field) |
+| **Errors** | `AlreadyInitialized` · `InvalidInput` (zero or negative fee field, or `xlm_token` is not a callable token contract) |
 
 ```bash
 stellar contract invoke --id $SCOUT_ACCESS_CONTRACT_ID \
