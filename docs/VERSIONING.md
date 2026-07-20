@@ -12,6 +12,8 @@ ScoutChain contracts follow [Semantic Versioning 2.0.0](https://semver.org/) —
 
 The current version of all four contracts is **v0.1.0**.
 
+> **Note:** `Cargo.toml` `[workspace.package].version` is the build-time source of truth; keep the Version History table below in sync with every Cargo version bump.
+
 Each contract exposes a `version()` function that returns its current version string:
 
 ```bash
