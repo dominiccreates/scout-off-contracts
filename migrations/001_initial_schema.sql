@@ -26,6 +26,23 @@ CREATE INDEX IF NOT EXISTS idx_players_level    ON players (level);
 CREATE INDEX IF NOT EXISTS idx_players_wallet   ON players (wallet);
 
 -- -----------------------------------------------------------------------
+-- Player level history (progress.progress_updated / progress.player_level_reset)
+-- Distinguishes normal progression (advance_level) from admin corrections
+-- (reset_player_level), matching the two contract code paths that change level.
+-- -----------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS player_level_history (
+    id              SERIAL       PRIMARY KEY,
+    player_id       BIGINT       NOT NULL REFERENCES players (player_id),
+    old_level       SMALLINT     NOT NULL,
+    new_level       SMALLINT     NOT NULL,
+    source          VARCHAR(16)  NOT NULL CHECK (source IN ('advance', 'reset')),
+    updated_by      VARCHAR(56),           -- caller Address for progress_updated; NULL for admin reset
+    created_db_at   TIMESTAMPTZ  NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_player_level_history_player ON player_level_history (player_id);
+
+-- -----------------------------------------------------------------------
 -- Scouts
 -- -----------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS scouts (
@@ -50,6 +67,22 @@ CREATE TABLE IF NOT EXISTS validators (
 );
 
 -- -----------------------------------------------------------------------
+-- Validator history (validator_restored / validator_transferred)
+-- The validators table only reflects current state; this table is the
+-- audit trail of restore and wallet-transfer events over time.
+-- -----------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS validator_history (
+    id              SERIAL       PRIMARY KEY,
+    event_type      VARCHAR(16)  NOT NULL CHECK (event_type IN ('restored', 'transferred')),
+    old_wallet      VARCHAR(56),           -- set for 'transferred'
+    new_wallet      VARCHAR(56)  NOT NULL, -- restored wallet, or the transfer's destination wallet
+    created_db_at   TIMESTAMPTZ  NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_validator_history_new_wallet ON validator_history (new_wallet);
+CREATE INDEX IF NOT EXISTS idx_validator_history_old_wallet ON validator_history (old_wallet);
+
+-- -----------------------------------------------------------------------
 -- Milestones
 -- -----------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS milestones (
@@ -67,6 +100,24 @@ CREATE TABLE IF NOT EXISTS milestones (
 CREATE INDEX IF NOT EXISTS idx_milestones_player ON milestones (player_id);
 
 -- -----------------------------------------------------------------------
+-- Milestone disputes (verification.milestone_disputed / dispute_resolved)
+-- -----------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS milestone_disputes (
+    id              SERIAL       PRIMARY KEY,
+    player_id       BIGINT       NOT NULL REFERENCES players (player_id),
+    milestone_index INTEGER      NOT NULL CHECK (milestone_index > 0),
+    reason          TEXT         NOT NULL,
+    disputed_at     BIGINT       NOT NULL,           -- Unix timestamp
+    resolved        BOOLEAN      NOT NULL DEFAULT FALSE,
+    upheld          BOOLEAN      NOT NULL DEFAULT FALSE,
+    resolved_at     TIMESTAMPTZ,
+    created_db_at   TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
+    UNIQUE (player_id, milestone_index)
+);
+
+CREATE INDEX IF NOT EXISTS idx_milestone_disputes_player ON milestone_disputes (player_id);
+
+-- -----------------------------------------------------------------------
 -- Scout subscriptions
 -- -----------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS scout_subscriptions (
@@ -75,6 +126,25 @@ CREATE TABLE IF NOT EXISTS scout_subscriptions (
     subscribed_at   BIGINT       NOT NULL,
     expires_at      BIGINT       NOT NULL,
     updated_db_at   TIMESTAMPTZ  NOT NULL DEFAULT NOW()
+);
+
+-- -----------------------------------------------------------------------
+-- Fee config history (scout_access.fee_config_updated) — audit trail of
+-- FeeConfig changes; scout_subscriptions only reflects live subscriptions.
+-- -----------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS fee_config_history (
+    id                          SERIAL      PRIMARY KEY,
+    old_contact_fee_stroops     BIGINT      NOT NULL,
+    old_basic_sub_stroops       BIGINT      NOT NULL,
+    old_pro_sub_stroops         BIGINT      NOT NULL,
+    old_elite_sub_stroops       BIGINT      NOT NULL,
+    old_sub_duration_secs       BIGINT      NOT NULL,
+    new_contact_fee_stroops     BIGINT      NOT NULL,
+    new_basic_sub_stroops       BIGINT      NOT NULL,
+    new_pro_sub_stroops         BIGINT      NOT NULL,
+    new_elite_sub_stroops       BIGINT      NOT NULL,
+    new_sub_duration_secs       BIGINT      NOT NULL,
+    created_db_at               TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 -- -----------------------------------------------------------------------
@@ -117,6 +187,21 @@ CREATE TABLE IF NOT EXISTS fee_withdrawals (
     amount_stroops  BIGINT       NOT NULL,
     withdrawn_at    TIMESTAMPTZ  NOT NULL DEFAULT NOW()
 );
+
+-- -----------------------------------------------------------------------
+-- Admin transfers (progress.admin_transferred / scout_access.admin_transferred)
+-- Both contracts emit the same event name, so contract_name disambiguates
+-- the source when both are indexed into one database.
+-- -----------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS admin_transfers (
+    id              SERIAL       PRIMARY KEY,
+    contract_name   VARCHAR(32)  NOT NULL CHECK (contract_name IN ('progress', 'scout_access')),
+    old_admin       VARCHAR(56)  NOT NULL,
+    new_admin       VARCHAR(56)  NOT NULL,
+    created_db_at   TIMESTAMPTZ  NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_admin_transfers_contract ON admin_transfers (contract_name);
 
 -- -----------------------------------------------------------------------
 -- Event cursor (indexer checkpoint)

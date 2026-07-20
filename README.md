@@ -382,18 +382,23 @@ See `bindings/README.md` for usage details.
 
 ## Database Schema
 
-`migrations/001_initial_schema.sql` creates the nine PostgreSQL tables the backend event indexer needs:
+`migrations/001_initial_schema.sql` creates the fourteen PostgreSQL tables the backend event indexer needs:
 
 | Table | Purpose |
 |-------|---------|
 | `players` | Cached player profiles, indexed by region/position/level for fast filtering |
+| `player_level_history` | Audit trail of level changes, tagged by source (`advance` vs admin `reset`) |
 | `scouts` | Scout profiles |
 | `validators` | Trusted validator registry |
+| `validator_history` | Audit trail of validator restore and wallet-transfer events |
 | `milestones` | Approved milestone records per player |
+| `milestone_disputes` | Player-filed milestone disputes and their resolution status |
 | `scout_subscriptions` | Active subscription records |
+| `fee_config_history` | Audit trail of scout_access fee configuration changes |
 | `contact_records` | Pay-to-contact audit log |
 | `trial_offers` | On-chain trial offer records |
 | `fee_withdrawals` | Platform fee withdrawal audit log |
+| `admin_transfers` | Audit trail of admin rotations across contracts |
 | `indexer_cursor` | Horizon event stream checkpoint (single row) |
 
 Run it against your backend PostgreSQL instance:
