@@ -2220,6 +2220,40 @@ mod tests {
     }
 
     #[test]
+    fn test_dispute_milestone_emits_event_with_reason() {
+        let (env, client) = setup();
+        let admin = Address::generate(&env);
+        client.initialize(&admin);
+
+        let validator = Address::generate(&env);
+        client.register_validator(&validator, &String::from_str(&env, "UEFA-B-License"));
+
+        let player_wallet = Address::generate(&env);
+        client.approve_milestone(
+            &validator,
+            &2u64,
+            &String::from_str(&env, "m1"),
+            &String::from_str(&env, VALID_CID_V0),
+        );
+
+        let reason = String::from_str(&env, "Wrong attribution");
+        client.dispute_milestone(&player_wallet, &2u64, &1u32, &reason);
+
+        let events = env.events().all();
+        assert_eq!(
+            events,
+            soroban_sdk::vec![
+                &env,
+                (
+                    client.address.clone(),
+                    (Symbol::new(&env, "milestone_disputed"), 2u64, 1u32).into_val(&env),
+                    reason.into_val(&env)
+                )
+            ]
+        );
+    }
+
+    #[test]
     fn test_resolve_dispute_missing_returns_milestone_not_found() {
         let (_env, client) = setup();
         let admin = Address::generate(&_env);
