@@ -860,7 +860,8 @@ stellar contract invoke --id $VERIFICATION_CONTRACT_ID \
 
 Return the list of `(player_id, milestone_index)` references for every
 milestone `wallet` has approved. `MilestoneRef` has `player_id: u64` and
-`milestone_index: u32`.
+`milestone_index: u32`. This legacy method is unbounded; high-volume callers
+should use `get_validator_milestones_page` instead.
 
 | | |
 |---|---|
@@ -870,6 +871,25 @@ milestone `wallet` has approved. `MilestoneRef` has `player_id: u64` and
 ```bash
 stellar contract invoke --id $VERIFICATION_CONTRACT_ID \
   -- get_validator_milestones --wallet $VALIDATOR_ADDRESS
+```
+
+---
+
+#### `get_validator_milestones_page(wallet: Address, offset: u32, limit: u32) -> Vec<MilestoneRef>`
+
+Return a bounded page of `(player_id, milestone_index)` references for milestones
+approved by `wallet`. `offset` is zero-based and `limit` is capped at 50 entries,
+matching `get_global_milestone_index`. Returns an empty `Vec` when the offset is
+beyond the validator's approval history or `limit` is zero.
+
+| | |
+|---|---|
+| **Auth** | None |
+| **Errors** | None |
+
+```bash
+stellar contract invoke --id $VERIFICATION_CONTRACT_ID \
+  -- get_validator_milestones_page --wallet $VALIDATOR_ADDRESS --offset 0 --limit 50
 ```
 
 ---
