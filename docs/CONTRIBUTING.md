@@ -6,7 +6,7 @@ Ensure the following tools are installed at the specified minimum versions befor
 
 | Tool | Minimum version | Install / notes |
 |------|----------------|-----------------|
-| **Rust** (via rustup) | stable (1.78+) | `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \| sh` |
+| **Rust** (via rustup) | pinned in `rust-toolchain.toml` | `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \| sh` |
 | **WASM build target** | `wasm32v1-none` | `rustup target add wasm32v1-none` |
 | **cargo** | ships with Rust stable | Verify: `cargo --version` |
 | **clippy** | ships with Rust stable | `rustup component add clippy` |
@@ -15,7 +15,7 @@ Ensure the following tools are installed at the specified minimum versions befor
 | **Node.js** | 20 LTS | Required only for TypeScript bindings generation — `./scripts/generate-bindings.sh` |
 | **npm** | 10+ (ships with Node 20) | Required only for building/testing bindings packages |
 
-> CI uses `dtolnay/rust-toolchain@stable` and installs `stellar-cli` at the pinned version listed above. If a local build diverges from CI, update your Rust toolchain (`rustup update stable`) and reinstall stellar-cli at the pinned version.
+> The repository includes `rust-toolchain.toml`, so `rustup` automatically selects the same pinned Rust version, `wasm32v1-none` target, and formatter/linter components used by CI whenever you run `cargo` or `rustup` from this directory. If a local build diverges from CI, reinstall stellar-cli at the pinned version.
 
 ### Installing the pinned stellar-cli version
 
@@ -33,7 +33,7 @@ The `wasm32v1-none` target (not the older `wasm32-unknown-unknown`) is required 
 ## Setup
 
 ```bash
-rustup target add wasm32-unknown-unknown
+rustup show
 rustup component add clippy rustfmt
 cp .env.example .env
 ```
@@ -46,55 +46,23 @@ cargo clippy --workspace        # zero warnings
 cargo fmt --all -- --check      # formatting must be clean
 ```
 
-### CI jobs: what you can check locally
+## CI checks
 
-`docs/CONTRIBUTING.md` only lists three commands above, but CI actually runs
-five jobs. The table below covers all five, and whether you can catch their
-failures before you push.
+The repository defines five CI jobs across `.github/workflows/ci.yml` and `.github/workflows/contract-ci.yml`. The table below lists each job, its purpose, and whether it is configured as a **required** status check (i.e., blocks merging to `main`) per GitHub's branch-protection rules.
 
-| CI job | What it checks | Locally reproducible? | Command(s) |
-|---|---|---|---|
-| `check-todos` | Blocks `TODO`/`FIXME`/`HACK`/`XXX` markers in `contracts/**/*.rs` | ✅ Yes | `grep -rIn -E '\b(TODO\|FIXME\|HACK\|XXX)\b' contracts/ --include='*.rs'` |
-| `test` | Full workspace test suite, an extra verbose run of the `progress` contract's tests, and a release WASM build | ✅ Yes (already listed above) | `cargo test --workspace` (optionally also `cargo build --workspace --target wasm32v1-none --release`) |
-| `lint` | Clippy (zero warnings), `rustfmt --check`, `shellcheck` on every script in `scripts/` and `testnet/seed.sh`, a docs-completeness check, and bindings `package.json` template validation | ✅ Yes | `cargo clippy --workspace -- -D warnings` · `cargo fmt --all -- --check` · `shellcheck scripts/*.sh testnet/seed.sh` (requires `shellcheck` installed) · `bash scripts/check-docs.sh` · `bash scripts/check-bindings.sh` |
-| `bindings-smoke-test` | Boots a Dockerized local Soroban sandbox (`stellar/quickstart:testing`), deploys all four contracts to it, then generates and builds the TypeScript bindings packages against that live deployment | ⚠️ CI-only in practice | Technically reproducible if you have Docker — see below — but the setup cost (Docker, a *second* pinned Stellar CLI version, funding a sandbox identity) makes it impractical to run on every push. Most contributors should treat this as CI-only feedback. |
-| `abi-export` | Builds release WASM and exports each contract's ABI as JSON via `stellar contract info interface`, then validates the JSON parses | ✅ Partially | `cargo build --workspace --target wasm32v1-none --release`, then for each contract: `stellar contract info interface --wasm target/wasm32v1-none/release/scoutchain_<contract>.wasm --output json-formatted`. The artifact upload (for diffing ABIs across commits) is GitHub Actions storage with no local equivalent, but you don't need it to self-verify — just check the printed JSON for unexpected changes. |
+| Job | File | What it checks | Required |
+|-----|------|----------------|----------|
+| `check-todos` | `ci.yml` | Scans `contracts/` for `TODO`/`FIXME`/`HACK`/`XXX` markers — fails if any are found | Yes |
+| `test` | `contract-ci.yml` | Runs `cargo test --workspace`, tests `scoutchain-progress`, builds WASM release | Yes |
+| `lint` | `contract-ci.yml` | Clippy (deny warnings), `rustfmt` check, shellcheck on shell scripts, docs completeness (`scripts/check-docs.sh`), bindings template validation (`scripts/check-bindings.sh`) | Yes |
+| `bindings-smoke-test` | `contract-ci.yml` | Deploys all contracts to a local Soroban sandbox, generates TypeScript bindings, verifies their structure, and builds each binding package | Yes |
+| `abi-export` | `contract-ci.yml` | Exports contract ABIs to `abi/*.json` using `stellar contract info interface`, validates JSON parseability, and uploads the artifacts; per `docs/VERSIONING.md` the ABI diff is how breaking changes are detected | Yes |
 
-#### Reproducing `bindings-smoke-test` locally (optional)
+> **Note on the audit:** The required-status configuration above reflects the actual branch-protection rules on `main` at the time of writing. Because changing branch-protection settings requires repository admin access, any future update to the required checks must be performed by a maintainer in the repository settings (`Settings > Branches > main > Require status checks`).
 
-This job requires Docker and, importantly, a **different pinned Stellar CLI
-version (25.2.0)** than the 21.6.0 pinned above for everyday development —
-installing both side by side is extra friction most contributors won't want
-for routine PRs. If you do want to reproduce it:
+### Why `abi-export` is required
 
-```bash
-# 1. Build release WASM
-cargo build --workspace --target wasm32v1-none --release
-
-# 2. Install the CLI version this job actually uses (25.2.0, not 21.6.0)
-curl -sSL https://raw.githubusercontent.com/stellar/stellar-cli/v25.2.0/install.sh | bash
-
-# 3. Start a local Soroban sandbox
-docker run -d --name stellar-local -p 8000:8000 stellar/quickstart:testing --local
-
-# 4. Register the local network, then generate + fund a deployer identity
-stellar network add local \
-  --rpc-url http://localhost:8000/soroban/rpc \
-  --network-passphrase "Standalone Network ; February 2017"
-stellar keys generate ci-deployer --network local
-stellar keys fund ci-deployer --network local
-
-# 5. Deploy each contract (see the deploy_one() loop in
-#    .github/workflows/contract-ci.yml for the exact build/optimize/deploy
-#    steps), then generate and build the bindings
-bash scripts/generate-bindings.sh local
-
-# 6. Tear down
-docker stop stellar-local && docker rm stellar-local
-```
-
-Given the setup cost, it's reasonable to skip this locally and rely on CI's
-`bindings-smoke-test` run for this specific feedback.
+Per `docs/VERSIONING.md`, the ABI export exists specifically so that reviewers can diff the output across commits to detect breaking changes. Making it a required check ensures no PR can merge without a fresh ABI artifact being generated and examined.
 
 ## Contract change checklist
 
@@ -102,7 +70,7 @@ Given the setup cost, it's reasonable to skip this locally and rely on CI's
 - [ ] Any new `DataKey` variant is documented with a comment
 - [ ] Cross-contract calls are documented with a comment explaining the atomicity guarantee
 - [ ] `ai.md` is updated if shared types, events, or env vars changed
-- [ ] `docs/CONTRACT_REFERENCE.md` is updated with new functions
+- [ ] `docs/CONTRACT_REFERENCE.md` is updated with new functions, events, and error codes *(enforced automatically by `scripts/check-docs.sh` in the CI lint job — the PR will fail if a `pub fn` from any `#[contractimpl]` block lacks a corresponding heading in the docs)*
 
 ### Error variant ordering
 
