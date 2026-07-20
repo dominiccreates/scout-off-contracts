@@ -90,6 +90,16 @@ impl ScoutAccessContract {
         if env.storage().instance().has(&DataKey::Initialized) {
             return Err(ScoutAccessError::AlreadyInitialized);
         }
+        // Probe the supplied xlm_token address to confirm it is a deployed
+        // token contract before we accept it. A wrong address (testnet SAC on
+        // mainnet, a typo, a plain account, a non-token contract) would
+        // otherwise only surface as an opaque failure on the first
+        // subscribe() call's transfer. The probe is read-only and
+        // side-effect-free.
+        match token::Client::new(&env, &xlm_token).try_decimals() {
+            Ok(_) => {}
+            Err(_) => return Err(ScoutAccessError::InvalidInput),
+        }
         admin.require_auth();
         Self::validate_fee_config(&fee_config)?;
         Self::bump_instance_ttl(&env);
@@ -1247,6 +1257,54 @@ mod tests {
     fn test_initialize_and_health() {
         let (_, _, _, _, client) = setup();
         assert!(client.health().initialized);
+    }
+
+    #[test]
+    fn test_initialize_accepts_real_token_contract() {
+        // A registered SAC exposes decimals() and must pass the probe.
+        let env = Env::default();
+        env.mock_all_auths();
+        let admin = Address::generate(&env);
+        let xlm = create_token(&env, &admin);
+        let contract_id = env.register_contract(None, ScoutAccessContract);
+        let client = ScoutAccessContractClient::new(&env, &contract_id);
+
+        let res = client.try_initialize(&admin, &xlm, &default_fees());
+        assert!(res.is_ok(), "real token contract should be accepted");
+    }
+
+    #[test]
+    fn test_initialize_rejects_plain_account_as_xlm_token() {
+        // A generated Address is a plain account, not a contract. The
+        // decimals() probe must fail and initialize must return InvalidInput
+        // with no storage side effects.
+        let env = Env::default();
+        env.mock_all_auths();
+        let admin = Address::generate(&env);
+        let not_a_token = Address::generate(&env);
+        let contract_id = env.register_contract(None, ScoutAccessContract);
+        let client = ScoutAccessContractClient::new(&env, &contract_id);
+
+        let res = client.try_initialize(&admin, &not_a_token, &default_fees());
+        assert_eq!(res, Err(Ok(ScoutAccessError::InvalidInput)));
+        assert!(!client.health().initialized);
+    }
+
+    #[test]
+    fn test_initialize_rejects_non_token_contract_as_xlm_token() {
+        // A registered contract that does not expose decimals() must also be
+        // rejected. We register a fresh contract (the scout_access contract
+        // itself) which has no decimals() method.
+        let env = Env::default();
+        env.mock_all_auths();
+        let admin = Address::generate(&env);
+        let not_a_token = env.register_contract(None, ScoutAccessContract);
+        let contract_id = env.register_contract(None, ScoutAccessContract);
+        let client = ScoutAccessContractClient::new(&env, &contract_id);
+
+        let res = client.try_initialize(&admin, &not_a_token, &default_fees());
+        assert_eq!(res, Err(Ok(ScoutAccessError::InvalidInput)));
+        assert!(!client.health().initialized);
     }
 
     #[test]

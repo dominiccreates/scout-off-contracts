@@ -461,7 +461,7 @@ When deploying to mainnet, **always verify** `config/mainnet.json` has been upda
 1. Test the full deployment flow on testnet first
 2. Verify all addresses in `.env` are correct for mainnet
 3. Confirm `ADMIN_ADDRESS` is the intended account — ownership cannot be transferred after initialization
-4. Double-check the `XLM_TOKEN_ADDRESS` matches the mainnet address (not testnet)
+4. Double-check the `XLM_TOKEN_ADDRESS` matches the mainnet address (not testnet). The `scout_access.initialize` call now probes `xlm_token` by invoking `decimals()` on it and returns `InvalidInput` if the address is not a deployed token contract, so a wrong address (testnet SAC on mainnet, a typo, a plain account, or a non-token contract) is caught at deploy time rather than surfacing later as an opaque failure on the first `subscribe()` call.
 
 ## Testing
 
