@@ -1,6 +1,6 @@
 # ScoutChain
 
-[![Soroban Contract CI](https://github.com/your-org/scoutchain/actions/workflows/contract-ci.yml/badge.svg)](https://github.com/your-org/scoutchain/actions/workflows/contract-ci.yml)
+[![Soroban Contract CI](https://github.com/scout-off/scout-off-contracts/actions/workflows/contract-ci.yml/badge.svg)](https://github.com/scout-off/scout-off-contracts/actions/workflows/contract-ci.yml)
 
 Decentralized football talent scouting platform on Stellar — tamper-proof player profiles, on-chain progress verification, and direct scout-to-player connections powered by Soroban smart contracts.
 
@@ -651,7 +651,7 @@ MIT
 
 ## Support
 
-- GitHub Issues: [Create an issue](https://github.com/your-org/scoutchain/issues)
+- GitHub Issues: [Create an issue](https://github.com/scout-off/scout-off-contracts/issues)
 - Stellar Discord: https://discord.gg/stellar
 - Stellar Developers: https://developers.stellar.org
 
