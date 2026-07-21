@@ -38,7 +38,7 @@
                   "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M"
                 },
                 {
-                  "string": "Coach"
+                  "string": "UEFA-B-License"
                 }
               ]
             }
@@ -95,7 +95,7 @@
                   "string": "milestone"
                 },
                 {
-                  "string": "QmPK1s3pNYLi9ERiq3BDxKa4XosgWwFRQUydHUtz4YgpqB"
+                  "string": "QmPK1s3pNYLi9ERiq3BDxKa4XosgWwFRQUydHUtz4YgpqC"
                 }
               ]
             }
@@ -123,7 +123,7 @@
                   "string": "milestone"
                 },
                 {
-                  "string": "QmPK1s3pNYLi9ERiq3BDxKa4XosgWwFRQUydHUtz4YgpqB"
+                  "string": "QmPK1s3pNYLi9ERiq3BDxKa4XosgWwFRQUydHUtz4YgpqD"
                 }
               ]
             }
@@ -161,6 +161,87 @@
               "durability": "persistent",
               "val": {
                 "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4"
+              }
+            }
+          },
+          "ext": "v0"
+        },
+        "live_until": 518401
+      },
+      {
+        "entry": {
+          "last_modified_ledger_seq": 0,
+          "data": {
+            "contract_data": {
+              "ext": "v0",
+              "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM",
+              "key": {
+                "vec": [
+                  {
+                    "symbol": "EvidenceUsed"
+                  },
+                  {
+                    "string": "QmPK1s3pNYLi9ERiq3BDxKa4XosgWwFRQUydHUtz4YgpqB"
+                  }
+                ]
+              },
+              "durability": "persistent",
+              "val": {
+                "bool": true
+              }
+            }
+          },
+          "ext": "v0"
+        },
+        "live_until": 4096
+      },
+      {
+        "entry": {
+          "last_modified_ledger_seq": 0,
+          "data": {
+            "contract_data": {
+              "ext": "v0",
+              "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM",
+              "key": {
+                "vec": [
+                  {
+                    "symbol": "EvidenceUsed"
+                  },
+                  {
+                    "string": "QmPK1s3pNYLi9ERiq3BDxKa4XosgWwFRQUydHUtz4YgpqC"
+                  }
+                ]
+              },
+              "durability": "persistent",
+              "val": {
+                "bool": true
+              }
+            }
+          },
+          "ext": "v0"
+        },
+        "live_until": 4096
+      },
+      {
+        "entry": {
+          "last_modified_ledger_seq": 0,
+          "data": {
+            "contract_data": {
+              "ext": "v0",
+              "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM",
+              "key": {
+                "vec": [
+                  {
+                    "symbol": "EvidenceUsed"
+                  },
+                  {
+                    "string": "QmPK1s3pNYLi9ERiq3BDxKa4XosgWwFRQUydHUtz4YgpqD"
+                  }
+                ]
+              },
+              "durability": "persistent",
+              "val": {
+                "bool": true
               }
             }
           },
@@ -291,7 +372,7 @@
                       "symbol": "evidence_hash"
                     },
                     "val": {
-                      "string": "QmPK1s3pNYLi9ERiq3BDxKa4XosgWwFRQUydHUtz4YgpqB"
+                      "string": "QmPK1s3pNYLi9ERiq3BDxKa4XosgWwFRQUydHUtz4YgpqC"
                     }
                   },
                   {
@@ -370,7 +451,7 @@
                       "symbol": "evidence_hash"
                     },
                     "val": {
-                      "string": "QmPK1s3pNYLi9ERiq3BDxKa4XosgWwFRQUydHUtz4YgpqB"
+                      "string": "QmPK1s3pNYLi9ERiq3BDxKa4XosgWwFRQUydHUtz4YgpqD"
                     }
                   },
                   {
@@ -519,7 +600,7 @@
                       "symbol": "credentials"
                     },
                     "val": {
-                      "string": "Coach"
+                      "string": "UEFA-B-License"
                     }
                   },
                   {
@@ -566,6 +647,94 @@
               "durability": "persistent",
               "val": {
                 "u32": 3
+              }
+            }
+          },
+          "ext": "v0"
+        },
+        "live_until": 4096
+      },
+      {
+        "entry": {
+          "last_modified_ledger_seq": 0,
+          "data": {
+            "contract_data": {
+              "ext": "v0",
+              "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM",
+              "key": {
+                "vec": [
+                  {
+                    "symbol": "ValidatorMilestones"
+                  },
+                  {
+                    "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M"
+                  }
+                ]
+              },
+              "durability": "persistent",
+              "val": {
+                "vec": [
+                  {
+                    "map": [
+                      {
+                        "key": {
+                          "symbol": "milestone_index"
+                        },
+                        "val": {
+                          "u32": 1
+                        }
+                      },
+                      {
+                        "key": {
+                          "symbol": "player_id"
+                        },
+                        "val": {
+                          "u64": "1"
+                        }
+                      }
+                    ]
+                  },
+                  {
+                    "map": [
+                      {
+                        "key": {
+                          "symbol": "milestone_index"
+                        },
+                        "val": {
+                          "u32": 1
+                        }
+                      },
+                      {
+                        "key": {
+                          "symbol": "player_id"
+                        },
+                        "val": {
+                          "u64": "2"
+                        }
+                      }
+                    ]
+                  },
+                  {
+                    "map": [
+                      {
+                        "key": {
+                          "symbol": "milestone_index"
+                        },
+                        "val": {
+                          "u32": 1
+                        }
+                      },
+                      {
+                        "key": {
+                          "symbol": "player_id"
+                        },
+                        "val": {
+                          "u64": "3"
+                        }
+                      }
+                    ]
+                  }
+                ]
               }
             }
           },
@@ -673,6 +842,43 @@
               "key": {
                 "vec": [
                   {
+                    "symbol": "ValidatorPlayers"
+                  },
+                  {
+                    "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M"
+                  }
+                ]
+              },
+              "durability": "persistent",
+              "val": {
+                "vec": [
+                  {
+                    "u64": "1"
+                  },
+                  {
+                    "u64": "2"
+                  },
+                  {
+                    "u64": "3"
+                  }
+                ]
+              }
+            }
+          },
+          "ext": "v0"
+        },
+        "live_until": 4096
+      },
+      {
+        "entry": {
+          "last_modified_ledger_seq": 0,
+          "data": {
+            "contract_data": {
+              "ext": "v0",
+              "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM",
+              "key": {
+                "vec": [
+                  {
                     "symbol": "ValidatorVector"
                   }
                 ]
@@ -710,12 +916,97 @@
                       "key": {
                         "vec": [
                           {
+                            "symbol": "ActiveDisputesCount"
+                          }
+                        ]
+                      },
+                      "val": {
+                        "u32": 0
+                      }
+                    },
+                    {
+                      "key": {
+                        "vec": [
+                          {
                             "symbol": "ActiveValidatorCount"
                           }
                         ]
                       },
                       "val": {
                         "u32": 1
+                      }
+                    },
+                    {
+                      "key": {
+                        "vec": [
+                          {
+                            "symbol": "GlobalMilestoneIndex"
+                          }
+                        ]
+                      },
+                      "val": {
+                        "vec": [
+                          {
+                            "map": [
+                              {
+                                "key": {
+                                  "symbol": "milestone_index"
+                                },
+                                "val": {
+                                  "u32": 1
+                                }
+                              },
+                              {
+                                "key": {
+                                  "symbol": "player_id"
+                                },
+                                "val": {
+                                  "u64": "1"
+                                }
+                              }
+                            ]
+                          },
+                          {
+                            "map": [
+                              {
+                                "key": {
+                                  "symbol": "milestone_index"
+                                },
+                                "val": {
+                                  "u32": 1
+                                }
+                              },
+                              {
+                                "key": {
+                                  "symbol": "player_id"
+                                },
+                                "val": {
+                                  "u64": "2"
+                                }
+                              }
+                            ]
+                          },
+                          {
+                            "map": [
+                              {
+                                "key": {
+                                  "symbol": "milestone_index"
+                                },
+                                "val": {
+                                  "u32": 1
+                                }
+                              },
+                              {
+                                "key": {
+                                  "symbol": "player_id"
+                                },
+                                "val": {
+                                  "u64": "3"
+                                }
+                              }
+                            ]
+                          }
+                        ]
                       }
                     },
                     {

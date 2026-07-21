@@ -24,40 +24,7 @@ source .env.contracts
 
 ### One-command pause script
 
-Save the following as `scripts/emergency-pause.sh` and run it:
-
-```bash
-#!/usr/bin/env bash
-set -euo pipefail
-
-source "$(dirname "$0")/../.env"
-source "$(dirname "$0")/../.env.contracts"
-
-NETWORK_ARGS="--network $STELLAR_NETWORK --source $ADMIN_SECRET"
-
-echo "==> Pausing registration contract..."
-stellar contract invoke --id "$REGISTRATION_CONTRACT_ID" $NETWORK_ARGS \
-  -- pause_contract
-
-echo "==> Pausing verification contract..."
-stellar contract invoke --id "$VERIFICATION_CONTRACT_ID" $NETWORK_ARGS \
-  -- pause_contract
-
-echo "==> Pausing progress contract..."
-stellar contract invoke --id "$PROGRESS_CONTRACT_ID" $NETWORK_ARGS \
-  -- pause_contract
-
-echo "==> Pausing scout_access contract..."
-stellar contract invoke --id "$SCOUT_ACCESS_CONTRACT_ID" $NETWORK_ARGS \
-  -- pause_contract
-
-echo "All four contracts paused."
-```
-
-```bash
-chmod +x scripts/emergency-pause.sh
-./scripts/emergency-pause.sh
-```
+Run ./scripts/emergency-pause.sh
 
 > **Note**: Each `pause_contract` call is a separate Stellar transaction.
 > If the script exits mid-way (e.g. network error), run it again — the already-
@@ -109,32 +76,10 @@ Only unpause after the root cause has been confirmed as fixed or mitigated.
 
 ### One-command unpause script
 
+Run the emergency unpause script:
+
 ```bash
-#!/usr/bin/env bash
-set -euo pipefail
-
-source "$(dirname "$0")/../.env"
-source "$(dirname "$0")/../.env.contracts"
-
-NETWORK_ARGS="--network $STELLAR_NETWORK --source $ADMIN_SECRET"
-
-echo "==> Unpausing registration contract..."
-stellar contract invoke --id "$REGISTRATION_CONTRACT_ID" $NETWORK_ARGS \
-  -- unpause_contract
-
-echo "==> Unpausing verification contract..."
-stellar contract invoke --id "$VERIFICATION_CONTRACT_ID" $NETWORK_ARGS \
-  -- unpause_contract
-
-echo "==> Unpausing progress contract..."
-stellar contract invoke --id "$PROGRESS_CONTRACT_ID" $NETWORK_ARGS \
-  -- unpause_contract
-
-echo "==> Unpausing scout_access contract..."
-stellar contract invoke --id "$SCOUT_ACCESS_CONTRACT_ID" $NETWORK_ARGS \
-  -- unpause_contract
-
-echo "All four contracts unpaused."
+./scripts/emergency-unpause.sh
 ```
 
 ### Verify each contract is unpaused
