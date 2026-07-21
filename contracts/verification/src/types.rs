@@ -59,6 +59,8 @@ pub struct MilestoneDispute {
     pub milestone_index: u32,
     pub reason: String,
     pub disputed_at: u64,
+    pub resolved: bool,
+    pub upheld: bool,
 }
 
 /// A lightweight reference to a milestone (player + index).
@@ -94,4 +96,5 @@ pub enum DataKey {
     /// Evidence hash → bool for global uniqueness check.
     EvidenceUsed(String),
     ValidatorMilestones(Address),
+    ActiveDisputesCount,
 }
