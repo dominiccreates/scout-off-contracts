@@ -157,6 +157,7 @@ stellar contract invoke --id $REGISTRATION_CONTRACT_ID \
 Hide a player from `filter_players` results without erasing their profile
 (soft-delete). Sets the `PlayerDeactivated` flag; the player's data and
 `player_id` remain intact and can be restored with `reactivate_player`.
+Emits a `player_deactivated` event on success.
 
 | | |
 |---|---|
@@ -174,6 +175,7 @@ stellar contract invoke --id $REGISTRATION_CONTRACT_ID \
 
 Reverse a prior `deactivate_player` call. Clears the `PlayerDeactivated`
 flag, making the player visible in `filter_players` results again.
+Emits a `player_reactivated` event on success.
 
 | | |
 |---|---|
@@ -1506,7 +1508,13 @@ greater than zero; either function returns `InvalidInput` otherwise.
 **Validation rules:**
 - Every `i128` fee field must be > 0 (zero or negative → `InvalidInput` error code 15).
 - `sub_duration_secs` must be > 0 (zero → `InvalidInput`).
-- There is no enforced upper bound, but values larger than the XLM supply
+- `pro_contact_limit` must be > 0 (zero → `InvalidInput`). This field caps the
+  number of unique players a **Pro-tier** scout may contact within a single
+  subscription period. Once the limit is reached, `pay_to_contact` returns
+  `ProContactLimitReached` (code 20) for that scout until their subscription
+  renews. **Elite-tier scouts are exempt** from this limit and may contact any
+  number of players regardless of `pro_contact_limit`.
+- There is no enforced upper bound on fee fields, but values larger than the XLM supply
   (≈ 500 000 000 XLM = 5 × 10¹⁵ stroops) will cause `Overflow` errors at fee
   settlement time.
 
@@ -1536,7 +1544,7 @@ stellar contract invoke --id $SCOUT_ACCESS_CONTRACT_ID \
   -- initialize \
   --admin $ADMIN_ADDRESS \
   --xlm_token $XLM_TOKEN_ADDRESS \
-  --fee_config '{"contact_fee_stroops":100000,"basic_sub_stroops":1000000,"pro_sub_stroops":3000000,"elite_sub_stroops":7000000,"sub_duration_secs":2592000}'
+  --fee_config '{"contact_fee_stroops":100000,"basic_sub_stroops":1000000,"pro_sub_stroops":3000000,"elite_sub_stroops":7000000,"sub_duration_secs":2592000,"pro_contact_limit":10}'
 ```
 
 ---
@@ -1613,7 +1621,7 @@ Adjust subscription and contact fee rates. Same validation rules as
 ```bash
 stellar contract invoke --id $SCOUT_ACCESS_CONTRACT_ID \
   -- update_fee_config \
-  --fee_config '{"contact_fee_stroops":200000,"basic_sub_stroops":2000000,"pro_sub_stroops":5000000,"elite_sub_stroops":10000000,"sub_duration_secs":2592000}'
+  --fee_config '{"contact_fee_stroops":200000,"basic_sub_stroops":2000000,"pro_sub_stroops":5000000,"elite_sub_stroops":10000000,"sub_duration_secs":2592000,"pro_contact_limit":20}'
 ```
 
 ---
@@ -1702,6 +1710,12 @@ stellar contract invoke --id $SCOUT_ACCESS_CONTRACT_ID \
 
 Pay a micro-fee to unlock a player's contact details. Scout must have an active
 (non-expired) subscription.
+
+**Pro-tier contact limit**: Pro-tier scouts are capped at `pro_contact_limit`
+unique player contacts per subscription period (configured in `FeeConfig`).
+Once the limit is reached, further `pay_to_contact` calls return
+`ProContactLimitReached` (code 20) until the subscription renews. Elite-tier
+scouts are **exempt** from this limit.
 
 | | |
 |---|---|
@@ -2456,10 +2470,9 @@ pub struct TrialOffer {
 | 15 | `InvalidInput` | Zero or negative fee field in `FeeConfig` |
 | 16 | `NoFeesToWithdraw` | No accumulated fees available to withdraw |
 | 17 | `UpgradeTooSoon` | Subscribe called before minimum interval elapsed |
-| 18 | `ContactQuotaExceeded` | Pro-tier scout exceeded monthly contact limit |
-| 19 | `TrialOfferRateLimited` | Trial offer sent to the same player within the 24h cooldown window |
-| 20 | `ProContactLimitReached` | Pro-tier scout reached the contact limit for the current subscription period |
-| 21 | `PendingAdminNotSet` | `accept_admin` called without a pending proposal |
+| 18 | `ContactQuotaExceeded` | Scout has hit the platform-wide contact quota for the current period (applies to all tiers; enforced by an admin-configurable platform cap, distinct from the per-Pro-scout `pro_contact_limit`) |
+| 19 | `TrialOfferRateLimited` | Elite scout sent a trial offer to the same player within the cooldown window — the offer was already logged; retry after the cooldown expires |
+| 20 | `ProContactLimitReached` | Pro-tier scout has reached the `pro_contact_limit` contacts for the current subscription period (Elite scouts are exempt from this limit) |
 
 ---
 
@@ -2471,6 +2484,8 @@ pub struct TrialOffer {
 | `scout_registered` | registration | New scout profile created |
 | `profile_updated` | registration | Player updates IPFS content hashes |
 | `player_deregistered` | registration | Admin removes a player profile |
+| `player_deactivated` | registration | Admin soft-hides a player from filter results |
+| `player_reactivated` | registration | Admin restores a soft-hidden player to filter results |
 | `scout_verified` | registration | Admin verifies a scout |
 | `player_level_synced` | registration | Progress contract syncs a player's level |
 | `contract_initialized` | verification | Contract initialized |

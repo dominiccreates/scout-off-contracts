@@ -259,7 +259,13 @@ Migration procedure:
 ## Common Mistakes
 
 **Milestones approved but player levels don't advance**
-You skipped the cross-contract wiring step. `approve_milestone` calls `advance_level` on the progress contract, but only if all links have been set. Fix it by running:
+You skipped the cross-contract wiring step. `approve_milestone` calls `advance_level` on the progress contract, but only if all links have been set. Run the wiring diagnostic first to identify which links are missing:
+
+```bash
+./scripts/verify-cross-contract-wiring.sh testnet
+```
+
+This prints a ✅/❌ table for all five wiring links in one command. If any link shows ❌, fix it by running:
 
 ```bash
 ./scripts/initialize.sh testnet

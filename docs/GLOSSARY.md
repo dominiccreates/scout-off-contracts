@@ -48,6 +48,11 @@ adjustable via `update_fee_config`.
 All fields must be strictly greater than zero; `initialize` and
 `update_fee_config` return `InvalidInput` otherwise.
 
+`pro_contact_limit` caps the number of unique players a **Pro-tier** scout
+may contact in a single subscription period. Reaching the limit causes
+`pay_to_contact` to return `ProContactLimitReached` (code 20). **Elite-tier
+scouts are exempt** from this cap.
+
 - Relevant functions: `initialize`, `update_fee_config`, `get_fee_config` — see
   [CONTRACT_REFERENCE.md](CONTRACT_REFERENCE.md#scout_access).
 

@@ -92,27 +92,33 @@ In short: `ProgressCallFailed` means the entire `approve_milestone` or `log_tria
 
 #### Recommended recovery steps for SDK consumers
 
-1. **Re-query the player level** immediately after receiving `ProgressCallFailed`:
+1. **Run the wiring diagnostic** — the fastest way to confirm which links are present:
+   ```bash
+   ./scripts/verify-cross-contract-wiring.sh testnet
+   ```
+   This queries all five documented wiring getters at once and prints a ✅/❌ table. A missing link is almost always the root cause of `ProgressCallFailed`.
+
+2. **Re-query the player level** immediately after receiving `ProgressCallFailed`:
    ```typescript
    const player = await progressClient.getPlayer({ player_id });
    console.log("Current level:", player.level);
    ```
    If the level did not advance, the root cause is a wiring problem, not a data issue.
 
-2. **Check if the progress contract is wired** — `ProgressCallFailed` almost always means the verification or scout_access contract does not have the progress contract address registered. Confirm by calling:
+3. **Check if the progress contract is wired manually** (if the script is unavailable) — confirm by calling:
    ```bash
    stellar contract invoke --id $VERIFICATION_CONTRACT_ID -- get_progress_contract
    ```
    An empty or missing result confirms the wiring is absent.
 
-3. **Re-wire the contracts** — run `initialize.sh` again or apply the manual wiring commands documented in [docs/DEPLOYMENT.md — Cross-Contract Wiring](docs/DEPLOYMENT.md#common-mistakes):
+4. **Re-wire the contracts** — run `initialize.sh` again or apply the manual wiring commands documented in [docs/DEPLOYMENT.md — Cross-Contract Wiring](docs/DEPLOYMENT.md#common-mistakes):
    ```bash
    ./scripts/initialize.sh testnet
    ```
 
-4. **Alert the admin** if the error is systematic (every `approve_milestone` call fails) — this indicates the progress contract was never wired or was re-deployed without re-running `initialize.sh`.
+5. **Alert the admin** if the error is systematic (every `approve_milestone` call fails) — this indicates the progress contract was never wired or was re-deployed without re-running `initialize.sh`.
 
-5. **Retry the transaction** — once wiring is confirmed, the original `approve_milestone` or `log_trial_offer` call can be retried safely. Because the full transaction was reverted, there is no duplicate-write risk.
+6. **Retry the transaction** — once wiring is confirmed, the original `approve_milestone` or `log_trial_offer` call can be retried safely. Because the full transaction was reverted, there is no duplicate-write risk.
 
 #### Summary
 

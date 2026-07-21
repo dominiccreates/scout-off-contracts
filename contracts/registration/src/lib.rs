@@ -367,6 +367,7 @@ impl RegistrationContract {
         env.storage()
             .persistent()
             .set(&DataKey::PlayerDeactivated(player_id), &true);
+        events::player_deactivated(&env, player_id);
         Ok(())
     }
 
@@ -381,6 +382,7 @@ impl RegistrationContract {
         env.storage()
             .persistent()
             .remove(&DataKey::PlayerDeactivated(player_id));
+        events::player_reactivated(&env, player_id);
         Ok(())
     }
 
@@ -1977,6 +1979,70 @@ mod tests {
             result_reactivated.profiles.get(0).unwrap().player_id,
             player_id
         );
+    }
+
+    // -------------------------------------------------------------------------
+    // Issue #647: player_deactivated and player_reactivated event emission
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn test_deactivate_player_emits_event() {
+        use soroban_sdk::testutils::Events;
+        use soroban_sdk::IntoVal;
+        let (env, client) = setup();
+        let admin = Address::generate(&env);
+        client.initialize(&admin);
+
+        let wallet = Address::generate(&env);
+        let hashes = vec![&env, String::from_str(&env, "QmTest")];
+        let player_id = client.register_player(&wallet, &dummy_vitals(&env), &hashes);
+
+        // Clear any events from registration so we only inspect deactivation events.
+        let _ = env.events().all();
+
+        client.deactivate_player(&player_id);
+
+        let events = env.events().all();
+        assert_eq!(events.len(), 1, "expected exactly one event from deactivate_player");
+
+        let (topics, data) = events.get(0).unwrap();
+        // Topic[0] should be the symbol "player_deactivated"
+        assert_eq!(
+            topics.get(0).unwrap(),
+            soroban_sdk::Symbol::new(&env, "player_deactivated").into_val(&env),
+        );
+        // Data should be the player_id
+        assert_eq!(data, player_id.into_val(&env));
+    }
+
+    #[test]
+    fn test_reactivate_player_emits_event() {
+        use soroban_sdk::testutils::Events;
+        use soroban_sdk::IntoVal;
+        let (env, client) = setup();
+        let admin = Address::generate(&env);
+        client.initialize(&admin);
+
+        let wallet = Address::generate(&env);
+        let hashes = vec![&env, String::from_str(&env, "QmTest")];
+        let player_id = client.register_player(&wallet, &dummy_vitals(&env), &hashes);
+
+        client.deactivate_player(&player_id);
+
+        // Clear events up to this point.
+        let _ = env.events().all();
+
+        client.reactivate_player(&player_id);
+
+        let events = env.events().all();
+        assert_eq!(events.len(), 1, "expected exactly one event from reactivate_player");
+
+        let (topics, data) = events.get(0).unwrap();
+        assert_eq!(
+            topics.get(0).unwrap(),
+            soroban_sdk::Symbol::new(&env, "player_reactivated").into_val(&env),
+        );
+        assert_eq!(data, player_id.into_val(&env));
     }
 
     // -------------------------------------------------------------------------
