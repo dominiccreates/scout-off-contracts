@@ -658,6 +658,7 @@ MIT
 ## Support
 
 - GitHub Issues: [Create an issue](https://github.com/your-org/scoutchain/issues)
+- **Security Reports**: See [SECURITY.md](SECURITY.md) for our security policy and private vulnerability reporting process
 - Stellar Discord: https://discord.gg/stellar
 - Stellar Developers: https://developers.stellar.org
 
