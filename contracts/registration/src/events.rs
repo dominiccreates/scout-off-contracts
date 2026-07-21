@@ -5,6 +5,8 @@ pub const PLAYER_REGISTERED: &str = "player_registered";
 pub const SCOUT_REGISTERED: &str = "scout_registered";
 pub const PROFILE_UPDATED: &str = "profile_updated";
 pub const PLAYER_DEREGISTERED: &str = "player_deregistered";
+pub const PLAYER_DEACTIVATED: &str = "player_deactivated";
+pub const PLAYER_REACTIVATED: &str = "player_reactivated";
 pub const PLAYER_LEVEL_SYNCED: &str = "player_level_synced";
 pub const SCOUT_VERIFIED: &str = "scout_verified";
 
@@ -30,6 +32,16 @@ pub fn profile_updated(env: &Env, player_id: u64) {
 pub fn player_deregistered(env: &Env, player_id: u64) {
     env.events()
         .publish((Symbol::new(env, "player_deregistered"),), player_id);
+}
+
+pub fn player_deactivated(env: &Env, player_id: u64) {
+    env.events()
+        .publish((Symbol::new(env, "player_deactivated"),), player_id);
+}
+
+pub fn player_reactivated(env: &Env, player_id: u64) {
+    env.events()
+        .publish((Symbol::new(env, "player_reactivated"),), player_id);
 }
 
 pub fn player_level_synced(env: &Env, player_id: u64) {
