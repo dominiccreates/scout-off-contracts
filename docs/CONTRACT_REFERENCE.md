@@ -1526,7 +1526,7 @@ trial offer index.
 | | |
 |---|---|
 | **Auth** | `scout` must sign (Elite subscription required) |
-| **Errors** | `ContractPaused` · `ScoutNotSubscribed` · `SubscriptionExpired` · `Unauthorized` (non-Elite tier) · `Overflow` · `ProgressCallFailed` |
+| **Errors** | `ContractPaused` · `ScoutNotSubscribed` · `SubscriptionExpired` · `Unauthorized` (non-Elite tier) · `TrialOfferRateLimited` (code 19, same player contacted within cooldown) · `Overflow` · `ProgressCallFailed` |
 
 ```bash
 stellar contract invoke --id $SCOUT_ACCESS_CONTRACT_ID \
@@ -2103,9 +2103,9 @@ pub struct TrialOffer {
 | 15 | `InvalidInput` | Zero or negative fee field in `FeeConfig` |
 | 16 | `NoFeesToWithdraw` | No accumulated fees available to withdraw |
 | 17 | `UpgradeTooSoon` | Subscribe called before minimum interval elapsed |
-| 18 | `ContactQuotaExceeded` | Pro-tier scout exceeded monthly contact limit |
-| 19 | `TrialOfferRateLimited` | Trial offer sent to the same player within the 24h cooldown window |
-| 20 | `ProContactLimitReached` | Pro-tier scout reached the contact limit for the current subscription period |
+| 18 | `ContactQuotaExceeded` | Scout has hit the platform-wide contact quota for the current period (applies to all tiers; enforced by an admin-configurable platform cap, distinct from the per-Pro-scout `pro_contact_limit`) |
+| 19 | `TrialOfferRateLimited` | Elite scout sent a trial offer to the same player within the cooldown window — the offer was already logged; retry after the cooldown expires |
+| 20 | `ProContactLimitReached` | Pro-tier scout has reached the `pro_contact_limit` contacts for the current subscription period (Elite scouts are exempt from this limit) |
 
 ---
 

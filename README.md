@@ -584,6 +584,9 @@ Each contract defines its own error enum. The same numeric code can mean differe
 | 12 | `ProgressCallFailed` | Cross-contract `advance_level` failed | Verify the progress contract is deployed and wired |
 | 13 | `Overflow` | Milestone counter overflowed | Contact admin |
 | 14 | `MilestoneNotFound` | Index out of range | Verify index against `get_milestone_count` |
+| 15 | `ValidatorCapReached` | 100-validator platform limit reached | Contract upgrade required to raise the cap; contact admin |
+| 16 | `DuplicateEvidence` | Evidence hash already used in a prior `approve_milestone` call | Use a unique evidence CID for each milestone approval |
+| 17 | `MilestoneLimitExceeded` | Validator has already approved 5 milestones for this player | A different validator must approve further milestones for this player |
 
 ### `ProgressError` (progress contract)
 
@@ -597,6 +600,7 @@ Each contract defines its own error enum. The same numeric code can mean differe
 | 6 | `AlreadyAtMaxLevel` | Player is already at `EliteTier` | No further advancement possible |
 | 7 | `PlayerNotFound` | History index out of range | Verify index against `get_history_count` |
 | 8 | `Overflow` | History counter overflowed | Contact admin |
+| 9 | `RegistrationCallFailed` | Cross-contract call to registration contract failed | Verify the registration contract is deployed and wired |
 
 ### `ScoutAccessError` (scout_access contract)
 
@@ -618,6 +622,9 @@ Each contract defines its own error enum. The same numeric code can mean differe
 | 15 | `InvalidInput` | Zero or negative fee field in `FeeConfig` | All fee fields and `sub_duration_secs` must be > 0 |
 | 16 | `NoFeesToWithdraw` | No accumulated fees to withdraw | Ensure fees have been collected before withdrawing |
 | 17 | `UpgradeTooSoon` | `subscribe` called before minimum interval elapsed | Wait at least 1 hour between subscribe calls |
+| 18 | `ContactQuotaExceeded` | Scout has hit the platform-wide contact quota for the current period | Wait for the quota window to reset or contact admin |
+| 19 | `TrialOfferRateLimited` | Scout sent a trial offer to the same player within the cooldown window | Wait for the cooldown period to expire before retrying |
+| 20 | `ProContactLimitReached` | Pro-tier scout has reached the `pro_contact_limit` contacts for the current subscription period | Upgrade to Elite (no limit applies) or wait for subscription to renew |
 
 ## Events
 
