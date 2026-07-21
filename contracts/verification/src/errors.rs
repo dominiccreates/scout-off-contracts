@@ -1,3 +1,4 @@
+use scoutchain_shared_types::AdminError;
 use soroban_sdk::contracterror;
 
 /// Append-only: do not renumber existing variants. See docs/CONTRIBUTING.md.
@@ -38,6 +39,8 @@ pub enum VerificationError {
     DuplicateEvidence = 16,
     /// Validator has already approved 5 milestones for this player.
     MilestoneLimitExceeded = 17,
+    /// Dispute was already resolved and cannot be resolved again.
+    DisputeAlreadyResolved = 18,
 
     // ── Input validation ──
     /// Bad evidence hash or credentials too long.
@@ -50,6 +53,12 @@ pub enum VerificationError {
     ProgressCallFailed = 12,
     /// Milestone counter overflowed.
     Overflow = 13,
+}
+
+impl AdminError for VerificationError {
+    fn not_initialized() -> Self {
+        VerificationError::NotInitialized
+    }
 }
 
 #[cfg(test)]

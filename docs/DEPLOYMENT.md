@@ -2,6 +2,9 @@
 
 ## Prerequisites
 
+<!-- Note: XLM token address source of truth -->
+> **Note:** The `xlm_token_address` values in `config/mainnet.json` and `config/testnet.json` (and the corresponding entry in `.env.example`) are sourced from Stellar's official SAC registry. The team member responsible for verifying and updating these addresses before each deployment is the **Release Engineer**. Ensure the addresses match the latest SAC documentation before deploying.
+
 - Rust + `wasm32-unknown-unknown` target: `rustup target add wasm32-unknown-unknown`
 - Stellar CLI: https://developers.stellar.org/docs/tools/developer-tools/cli/install-stellar-cli
 - A funded Stellar keypair for deployment
@@ -17,10 +20,13 @@ missing contract ID error.
    originate here. No dependency on any other contract.
 
 2. **`verification`** — Deployed second because `approve_milestone` must
-   cross-call `progress.advance_level`. The progress contract address is wired
-   in by `initialize.sh` *after* both are deployed; deploying verification
-   before registration is safe but deploying it after progress and skipping
-   registration will break the milestone flow at runtime.
+   cross‑call `progress.advance_level`. The progress contract address is wired
+   in by `initialize.sh` *after* both verification and registration are deployed.
+
+   **Deployment order guidance:**
+
+   - ✅ *Safe*: Deploy `verification` **before** `registration`.
+   - ❌ *Breaks milestone flow*: Deploy `verification` **after** `progress` **and** skip deploying `registration`.
 
 3. **`progress`** — Deployed third. Holds the four-tier level state machine.
    Receives calls only from the verification contract (production) or directly
@@ -253,7 +259,13 @@ Migration procedure:
 ## Common Mistakes
 
 **Milestones approved but player levels don't advance**
-You skipped the cross-contract wiring step. `approve_milestone` calls `advance_level` on the progress contract, but only if all links have been set. Fix it by running:
+You skipped the cross-contract wiring step. `approve_milestone` calls `advance_level` on the progress contract, but only if all links have been set. Run the wiring diagnostic first to identify which links are missing:
+
+```bash
+./scripts/verify-cross-contract-wiring.sh testnet
+```
+
+This prints a ✅/❌ table for all five wiring links in one command. If any link shows ❌, fix it by running:
 
 ```bash
 ./scripts/initialize.sh testnet
