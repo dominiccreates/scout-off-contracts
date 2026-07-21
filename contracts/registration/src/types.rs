@@ -78,6 +78,9 @@ pub struct ScoutProfile {
 pub enum DataKey {
     /// Admin wallet address authorized to manage validators and fees
     Admin,
+    /// Proposed replacement admin. Set by `propose_admin` and removed after
+    /// the proposed address proves control by calling `accept_admin`.
+    PendingAdmin,
     /// Boolean flag indicating if contract has been initialized
     Initialized,
     /// Boolean flag indicating if contract is paused (circuit breaker)

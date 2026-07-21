@@ -143,6 +143,8 @@ For the full wiring procedure, see [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).
 | `player_contacted` | scout_access | `scout`, `player_id` |
 | `trial_offer_logged` | scout_access | `scout`, `player_id`, `details_hash` |
 | `fees_withdrawn` | scout_access | `to`, `amount` |
+| `admin_transfer_proposed` | all four contracts | `old_admin`, `new_admin` |
+| `admin_transferred` | all four contracts | `old_admin`, `new_admin` |
 
 ---
 
@@ -150,5 +152,6 @@ For the full wiring procedure, see [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).
 
 - **Wiring must be re-run after every fresh deployment.** Contract IDs change on each deploy; the old wiring references stale IDs.
 - **`initialize` is one-time per contract.** Calling it twice returns `AlreadyInitialized` (code 1). This is not an error — the contract is already ready.
+- **Admin rotation is two-step.** The current admin calls `propose_admin`, then the pending address must sign `accept_admin`; the old admin remains active until acceptance.
 - **Error codes are per-contract, not global.** Code `4` means `Unauthorized` in the verification contract but `Unauthorized` (different context) in scout_access. Always check which contract returned the error.
 - **Subscription tier check is enforced on-chain.** Basic scouts cannot call `pay_to_contact` without an active subscription. Elite is required for `log_trial_offer`.

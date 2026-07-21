@@ -1,6 +1,6 @@
 use soroban_sdk::{contracttype, Address};
 
-pub use scoutchain_shared_types::{ContractHealth, ProgressLevel};
+pub use scoutchain_shared_types::ProgressLevel;
 
 /// A single entry in the immutable progress history
 #[contracttype]
@@ -21,8 +21,11 @@ pub struct ProgressEntry {
 #[contracttype]
 pub enum DataKey {
     /// The `Address` of the contract administrator. Set during `initialize` and
-    /// updated by `transfer_admin`. Required for all privileged operations.
+    /// updated by `accept_admin`. Required for all privileged operations.
     Admin,
+    /// Proposed replacement admin. The address stored here must call
+    /// `accept_admin` before `Admin` is updated.
+    PendingAdmin,
     /// Boolean flag (`true`) written during `initialize`. Absence or `false`
     /// means the contract has not yet been set up; `health()` reads this key.
     Initialized,

@@ -9,6 +9,22 @@ pub const PLAYER_DEACTIVATED: &str = "player_deactivated";
 pub const PLAYER_REACTIVATED: &str = "player_reactivated";
 pub const PLAYER_LEVEL_SYNCED: &str = "player_level_synced";
 pub const SCOUT_VERIFIED: &str = "scout_verified";
+pub const ADMIN_TRANSFER_PROPOSED: &str = "admin_transfer_proposed";
+pub const ADMIN_TRANSFERRED: &str = "admin_transferred";
+
+pub fn admin_transfer_proposed(env: &Env, old_admin: &Address, new_admin: &Address) {
+    env.events().publish(
+        (Symbol::new(env, ADMIN_TRANSFER_PROPOSED),),
+        (old_admin.clone(), new_admin.clone()),
+    );
+}
+
+pub fn admin_transferred(env: &Env, old_admin: &Address, new_admin: &Address) {
+    env.events().publish(
+        (Symbol::new(env, ADMIN_TRANSFERRED),),
+        (old_admin.clone(), new_admin.clone()),
+    );
+}
 
 pub fn player_registered(env: &Env, player_id: u64, wallet: &Address) {
     env.events().publish(
