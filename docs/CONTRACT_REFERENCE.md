@@ -115,6 +115,7 @@ stellar contract invoke --id $REGISTRATION_CONTRACT_ID \
 Hide a player from `filter_players` results without erasing their profile
 (soft-delete). Sets the `PlayerDeactivated` flag; the player's data and
 `player_id` remain intact and can be restored with `reactivate_player`.
+Emits a `player_deactivated` event on success.
 
 | | |
 |---|---|
@@ -132,6 +133,7 @@ stellar contract invoke --id $REGISTRATION_CONTRACT_ID \
 
 Reverse a prior `deactivate_player` call. Clears the `PlayerDeactivated`
 flag, making the player visible in `filter_players` results again.
+Emits a `player_reactivated` event on success.
 
 | | |
 |---|---|
@@ -2344,6 +2346,8 @@ pub struct TrialOffer {
 | `scout_registered` | registration | New scout profile created |
 | `profile_updated` | registration | Player updates IPFS content hashes |
 | `player_deregistered` | registration | Admin removes a player profile |
+| `player_deactivated` | registration | Admin soft-hides a player from filter results |
+| `player_reactivated` | registration | Admin restores a soft-hidden player to filter results |
 | `scout_verified` | registration | Admin verifies a scout |
 | `player_level_synced` | registration | Progress contract syncs a player's level |
 | `contract_initialized` | verification | Contract initialized |
