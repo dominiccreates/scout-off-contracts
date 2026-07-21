@@ -768,16 +768,52 @@ impl ScoutAccessContract {
         Ok(next_index)
     }
 
-    pub fn transfer_admin(env: Env, new_admin: Address) -> Result<(), ScoutAccessError> {
-        require_admin(&env, &DataKey::Admin, ADMIN_BUMP_LEDGERS)?;
+    /// Propose a replacement administrator. The current admin remains active
+    /// until the proposed address calls `accept_admin`.
+    pub fn propose_admin(env: Env, new_admin: Address) -> Result<(), ScoutAccessError> {
+        Self::bump_instance_ttl(&env);
+        let old_admin = require_admin(&env, &DataKey::Admin, ADMIN_BUMP_LEDGERS)?;
+        env.storage()
+            .persistent()
+            .set(&DataKey::PendingAdmin, &new_admin);
+        env.storage().persistent().extend_ttl(
+            &DataKey::PendingAdmin,
+            ADMIN_BUMP_LEDGERS,
+            ADMIN_BUMP_LEDGERS,
+        );
+        events::admin_transfer_proposed(&env, &old_admin, &new_admin);
+        Ok(())
+    }
+
+    /// Accept a pending admin transfer. Only the proposed address can accept.
+    pub fn accept_admin(env: Env) -> Result<(), ScoutAccessError> {
+        Self::bump_instance_ttl(&env);
         let old_admin: Address = env
             .storage()
             .persistent()
             .get(&DataKey::Admin)
             .ok_or(ScoutAccessError::NotInitialized)?;
+        let new_admin: Address = env
+            .storage()
+            .persistent()
+            .get(&DataKey::PendingAdmin)
+            .ok_or(ScoutAccessError::PendingAdminNotSet)?;
+        new_admin.require_auth();
         env.storage().persistent().set(&DataKey::Admin, &new_admin);
+        env.storage().persistent().extend_ttl(
+            &DataKey::Admin,
+            ADMIN_BUMP_LEDGERS,
+            ADMIN_BUMP_LEDGERS,
+        );
+        env.storage().persistent().remove(&DataKey::PendingAdmin);
         events::admin_transferred(&env, &old_admin, &new_admin);
         Ok(())
+    }
+
+    /// Deprecated alias for `propose_admin`; this no longer transfers control
+    /// immediately. The proposed address must still call `accept_admin`.
+    pub fn transfer_admin(env: Env, new_admin: Address) -> Result<(), ScoutAccessError> {
+        Self::propose_admin(env, new_admin)
     }
 
     // -------------------------------------------------------------------------
@@ -1048,7 +1084,6 @@ impl ScoutAccessContract {
         }
     }
 
-
     fn require_initialized(env: &Env) -> Result<(), ScoutAccessError> {
         if !env
             .storage()
@@ -1072,7 +1107,6 @@ impl ScoutAccessContract {
         }
         Ok(())
     }
-
 
     fn get_token(env: &Env) -> Result<Address, ScoutAccessError> {
         env.storage()
@@ -1916,11 +1950,98 @@ mod tests {
     }
 
     #[test]
-    fn test_transfer_admin_success() {
-        let (env, _admin, _xlm, _contract_id, client) = setup();
+    fn test_admin_transfer_propose_replace_and_accept() {
+        let (env, old_admin, _xlm, contract_id, client) = setup();
+        let stale_admin = Address::generate(&env);
         let new_admin = Address::generate(&env);
 
-        client.transfer_admin(&new_admin);
+        client.propose_admin(&stale_admin);
+        assert_eq!(
+            env.events().all(),
+            soroban_sdk::vec![
+                &env,
+                (
+                    contract_id.clone(),
+                    (Symbol::new(&env, events::ADMIN_TRANSFER_PROPOSED),).into_val(&env),
+                    (old_admin.clone(), stale_admin).into_val(&env),
+                )
+            ]
+        );
+
+        client.pause_contract();
+        client.unpause_contract();
+
+        client.propose_admin(&new_admin);
+        env.as_contract(&contract_id, || {
+            assert_eq!(
+                env.storage()
+                    .persistent()
+                    .get::<DataKey, Address>(&DataKey::Admin),
+                Some(old_admin.clone())
+            );
+            assert_eq!(
+                env.storage()
+                    .persistent()
+                    .get::<DataKey, Address>(&DataKey::PendingAdmin),
+                Some(new_admin.clone())
+            );
+        });
+
+        env.mock_auths(&[MockAuth {
+            address: &new_admin,
+            invoke: &MockAuthInvoke {
+                contract: &contract_id,
+                fn_name: "accept_admin",
+                args: soroban_sdk::vec![&env],
+                sub_invokes: &[],
+            },
+        }]);
+        client.accept_admin();
+        assert_eq!(
+            env.events().all(),
+            soroban_sdk::vec![
+                &env,
+                (
+                    contract_id.clone(),
+                    (
+                        Symbol::new(&env, events::ADMIN_TRANSFERRED),
+                        old_admin.clone(),
+                        new_admin.clone()
+                    )
+                        .into_val(&env),
+                    ().into_val(&env),
+                )
+            ]
+        );
+        env.as_contract(&contract_id, || {
+            assert_eq!(
+                env.storage()
+                    .persistent()
+                    .get::<DataKey, Address>(&DataKey::Admin),
+                Some(new_admin)
+            );
+            assert!(!env.storage().persistent().has(&DataKey::PendingAdmin));
+        });
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_third_party_cannot_accept_admin() {
+        let (env, _old_admin, _xlm, contract_id, client) = setup();
+        let pending_admin = Address::generate(&env);
+        let third_party = Address::generate(&env);
+        client.propose_admin(&pending_admin);
+
+        env.mock_auths(&[MockAuth {
+            address: &third_party,
+            invoke: &MockAuthInvoke {
+                contract: &contract_id,
+                fn_name: "accept_admin",
+                args: soroban_sdk::vec![&env],
+                sub_invokes: &[],
+            },
+        }]);
+        client.accept_admin();
     }
 
     #[test]
@@ -2381,7 +2502,6 @@ mod tests {
     // refund_subscription tests
     // -------------------------------------------------------------------------
 
-    #[test]
     // -------------------------------------------------------------------------
     // Fee accumulation tests across multiple subscriptions
     // -------------------------------------------------------------------------
@@ -3319,8 +3439,7 @@ mod tests {
         let scout = Address::generate(&env);
         // No subscription — ScoutNotSubscribed is also true.
 
-        let result =
-            client.try_log_trial_offer(&scout, &1u64, &String::from_str(&env, "tooshort"));
+        let result = client.try_log_trial_offer(&scout, &1u64, &String::from_str(&env, "tooshort"));
         // Priority 3: InvalidInput wins over Priority 4: ScoutNotSubscribed.
         assert_eq!(result, Err(Ok(ScoutAccessError::InvalidInput)));
     }
@@ -3336,8 +3455,7 @@ mod tests {
         client.subscribe(&scout, &SubscriptionTier::Pro);
         // Pro tier (non-Elite) — Unauthorized also true.
 
-        let result =
-            client.try_log_trial_offer(&scout, &1u64, &String::from_str(&env, "tooshort"));
+        let result = client.try_log_trial_offer(&scout, &1u64, &String::from_str(&env, "tooshort"));
         // Priority 3: InvalidInput wins over Priority 5: Unauthorized.
         assert_eq!(result, Err(Ok(ScoutAccessError::InvalidInput)));
     }

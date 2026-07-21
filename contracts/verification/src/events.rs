@@ -9,6 +9,22 @@ pub const CONTRACT_UNPAUSED: &str = "contract_unpaused";
 pub const CONTRACT_INITIALIZED: &str = "contract_initialized";
 pub const PROGRESS_CONTRACT_UPDATED: &str = "progress_contract_updated";
 pub const DISPUTE_RESOLVED: &str = "dispute_resolved";
+pub const ADMIN_TRANSFER_PROPOSED: &str = "admin_transfer_proposed";
+pub const ADMIN_TRANSFERRED: &str = "admin_transferred";
+
+pub fn admin_transfer_proposed(env: &Env, old_admin: &Address, new_admin: &Address) {
+    env.events().publish(
+        (Symbol::new(env, ADMIN_TRANSFER_PROPOSED),),
+        (old_admin.clone(), new_admin.clone()),
+    );
+}
+
+pub fn admin_transferred(env: &Env, old_admin: &Address, new_admin: &Address) {
+    env.events().publish(
+        (Symbol::new(env, ADMIN_TRANSFERRED),),
+        (old_admin.clone(), new_admin.clone()),
+    );
+}
 
 pub fn milestone_approved(
     env: &Env,

@@ -51,6 +51,48 @@ stellar contract invoke --id $REGISTRATION_CONTRACT_ID \
 
 ---
 
+#### `propose_admin(new_admin: Address) -> Result<(), ScoutChainError>`
+
+Store or replace a pending admin proposal. The current admin retains all
+privileges until the proposed address accepts.
+
+| | |
+|---|---|
+| **Auth** | Current admin must sign |
+| **Errors** | `NotInitialized` |
+| **Emits** | `admin_transfer_proposed` with `(old_admin, new_admin)` |
+
+```bash
+stellar contract invoke --id $REGISTRATION_CONTRACT_ID \
+  -- propose_admin --new_admin $NEW_ADMIN_ADDRESS
+```
+
+---
+
+#### `accept_admin() -> Result<(), ScoutChainError>`
+
+Finalize the pending transfer. The stored pending admin must sign, proving
+control of the address. Acceptance updates the admin and clears the proposal.
+
+| | |
+|---|---|
+| **Auth** | Pending admin must sign |
+| **Errors** | `NotInitialized` · `PendingAdminNotSet` |
+| **Emits** | `admin_transferred` with `(old_admin, new_admin)` |
+
+```bash
+stellar contract invoke --id $REGISTRATION_CONTRACT_ID -- accept_admin
+```
+
+---
+
+#### `transfer_admin(new_admin: Address) -> Result<(), ScoutChainError>`
+
+Deprecated compatibility alias for `propose_admin`. It does not immediately
+change the admin; the proposed address must still call `accept_admin`.
+
+---
+
 #### `register_player(wallet: Address, vitals: PlayerVitals, ipfs_hashes: Vec<String>) -> Result<u64, ScoutChainError>`
 
 Create a new on-chain player profile at Level 0 (Unverified).
@@ -447,6 +489,48 @@ One-time contract setup.
 stellar contract invoke --id $VERIFICATION_CONTRACT_ID \
   -- initialize --admin $ADMIN_ADDRESS
 ```
+
+---
+
+#### `propose_admin(new_admin: Address) -> Result<(), VerificationError>`
+
+Store or replace a pending admin proposal. The current admin retains all
+privileges until the proposed address accepts.
+
+| | |
+|---|---|
+| **Auth** | Current admin must sign |
+| **Errors** | `NotInitialized` |
+| **Emits** | `admin_transfer_proposed` with `(old_admin, new_admin)` |
+
+```bash
+stellar contract invoke --id $VERIFICATION_CONTRACT_ID \
+  -- propose_admin --new_admin $NEW_ADMIN_ADDRESS
+```
+
+---
+
+#### `accept_admin() -> Result<(), VerificationError>`
+
+Finalize the pending transfer. The stored pending admin must sign, proving
+control of the address. Acceptance updates the admin and clears the proposal.
+
+| | |
+|---|---|
+| **Auth** | Pending admin must sign |
+| **Errors** | `NotInitialized` · `PendingAdminNotSet` |
+| **Emits** | `admin_transferred` with `(old_admin, new_admin)` |
+
+```bash
+stellar contract invoke --id $VERIFICATION_CONTRACT_ID -- accept_admin
+```
+
+---
+
+#### `transfer_admin(new_admin: Address) -> Result<(), VerificationError>`
+
+Deprecated compatibility alias for `propose_admin`. It does not immediately
+change the admin; the proposed address must still call `accept_admin`.
 
 ---
 
@@ -1020,6 +1104,8 @@ stellar contract invoke --id $VERIFICATION_CONTRACT_ID -- version
 | Event | Topics | Data | Description |
 |-------|--------|------|-------------|
 | `contract_initialized` | event_name | admin (Address) | Emitted on successful initialization |
+| `admin_transfer_proposed` | event_name | old_admin (Address), new_admin (Address) | Admin replacement proposed |
+| `admin_transferred` | event_name | old_admin (Address), new_admin (Address) | Pending admin accepts control |
 | `milestone_approved` | event_name, validator_address, milestone_index (u32) | player_id (u64), description (String), evidence_hash (String) | Validator confirms a player achievement |
 | `validator_registered` | event_name | validator_address | New validator onboarded |
 | `validator_revoked` | event_name | validator_address, reason (String) | Validator deactivated |
@@ -1056,36 +1142,45 @@ stellar contract invoke --id $PROGRESS_CONTRACT_ID \
 
 ---
 
-#### `transfer_admin(new_admin: Address) -> Result<(), ProgressError>`
+#### `propose_admin(new_admin: Address) -> Result<(), ProgressError>`
 
-Transfer admin rights to `new_admin`. The current admin loses **all** privileged
-access immediately and irreversibly — there is no undo. The old admin address
-is no longer authorised to call any admin-only function after this transaction
-confirms.
-
-> ⚠️ **Irreversible**: Once transferred, only `new_admin` can call
-> `transfer_admin` again to change ownership. If `new_admin` is a lost or
-> inaccessible key, admin access to this contract is permanently lost. Verify
-> the new address before invoking.
-
-**Parameters**
-
-| Parameter | Type | Description |
-|-----------|------|-------------|
-| `new_admin` | `Address` | Stellar address that will become the new contract admin |
-
-**Return type**: `Result<(), ProgressError>` — `Ok(())` on success.
+Store or replace a pending admin proposal. The current admin retains all
+privileges until the proposed address accepts.
 
 | | |
 |---|---|
-| **Auth** | Current admin must sign (`require_auth` on the stored admin address) |
-| **Errors** | `NotInitialized` if the contract has not been initialised |
-| **Emits** | `admin_transferred` — topics: `(Symbol("admin_transferred"),)`, data: `(old_admin: Address, new_admin: Address)` |
+| **Auth** | Current admin must sign |
+| **Errors** | `NotInitialized` |
+| **Emits** | `admin_transfer_proposed` with `(old_admin, new_admin)` |
 
 ```bash
 stellar contract invoke --id $PROGRESS_CONTRACT_ID \
-  -- transfer_admin --new_admin $NEW_ADMIN_ADDRESS
+  -- propose_admin --new_admin $NEW_ADMIN_ADDRESS
 ```
+
+---
+
+#### `accept_admin() -> Result<(), ProgressError>`
+
+Finalize the transfer. The stored pending admin must sign, proving control of
+the address. Acceptance updates the admin and clears the proposal.
+
+| | |
+|---|---|
+| **Auth** | Pending admin must sign |
+| **Errors** | `NotInitialized` · `PendingAdminNotSet` |
+| **Emits** | `admin_transferred` with `(old_admin, new_admin)` |
+
+```bash
+stellar contract invoke --id $PROGRESS_CONTRACT_ID -- accept_admin
+```
+
+---
+
+#### `transfer_admin(new_admin: Address) -> Result<(), ProgressError>`
+
+Deprecated compatibility alias for `propose_admin`. It creates or replaces a
+proposal and does not immediately change the admin.
 
 ---
 
@@ -1378,6 +1473,7 @@ stellar contract invoke --id $PROGRESS_CONTRACT_ID -- version
 |-------|--------|------|-------------|
 | `progress_updated` | event_name, updated_by (Address) | player_id (u64), old_level, new_level | Player advances one tier |
 | `player_level_reset` | event_name | player_id (u64), old_level, new_level | Admin resets a player's level |
+| `admin_transfer_proposed` | event_name | old_admin (Address), new_admin (Address) | Admin replacement proposed |
 | `admin_transferred` | event_name | old_admin (Address), new_admin (Address) | Admin rights rotated |
 
 ---
@@ -1445,19 +1541,45 @@ stellar contract invoke --id $SCOUT_ACCESS_CONTRACT_ID \
 
 ---
 
-#### `transfer_admin(new_admin: Address) -> Result<(), ScoutAccessError>`
+#### `propose_admin(new_admin: Address) -> Result<(), ScoutAccessError>`
 
-Transfer admin rights to a new address immediately.
+Store or replace a pending admin proposal. The current admin retains all
+privileges until the proposed address accepts.
 
 | | |
 |---|---|
 | **Auth** | Current admin must sign |
-| **Errors** | `NotInitialized` · `Unauthorized` |
+| **Errors** | `NotInitialized` |
+| **Emits** | `admin_transfer_proposed` with `(old_admin, new_admin)` |
 
 ```bash
 stellar contract invoke --id $SCOUT_ACCESS_CONTRACT_ID \
-  -- transfer_admin --new_admin $NEW_ADMIN_ADDRESS
+  -- propose_admin --new_admin $NEW_ADMIN_ADDRESS
 ```
+
+---
+
+#### `accept_admin() -> Result<(), ScoutAccessError>`
+
+Finalize the transfer. The stored pending admin must sign, proving control of
+the address. Acceptance updates the admin and clears the proposal.
+
+| | |
+|---|---|
+| **Auth** | Pending admin must sign |
+| **Errors** | `NotInitialized` · `PendingAdminNotSet` |
+| **Emits** | `admin_transferred` with `(old_admin, new_admin)` |
+
+```bash
+stellar contract invoke --id $SCOUT_ACCESS_CONTRACT_ID -- accept_admin
+```
+
+---
+
+#### `transfer_admin(new_admin: Address) -> Result<(), ScoutAccessError>`
+
+Deprecated compatibility alias for `propose_admin`. It creates or replaces a
+proposal and does not immediately change the admin.
 
 ---
 
@@ -2034,6 +2156,7 @@ stellar contract invoke --id $SCOUT_ACCESS_CONTRACT_ID -- version
 | `trial_offer_logged` | event_name, scout (Address) | player_id (u64) | Elite scout records a trial offer |
 | `fees_withdrawn` | event_name, to (Address) | amount (i128) | Admin withdraws accumulated fees |
 | `subscription_refunded` | event_name, scout (Address) | amount (i128) | Admin issues emergency refund to a scout |
+| `admin_transfer_proposed` | event_name | (old_admin: Address, new_admin: Address) | Admin replacement proposed |
 | `admin_transferred` | event_name | (old_admin: Address, new_admin: Address) | Admin rights rotated |
 | `contract_paused` | event_name | admin (Address) | Circuit breaker engaged |
 | `contract_unpaused` | event_name | admin (Address) | Circuit breaker released |
@@ -2272,6 +2395,7 @@ pub struct TrialOffer {
 | 11 | `Overflow` | Counter or fee arithmetic overflowed |
 | 12 | `ScoutNotFound` | Invalid `scout_id` |
 | 13 | `InvalidInput` | Field too long, bad hash count, or empty value |
+| 14 | `PendingAdminNotSet` | `accept_admin` called without a pending proposal |
 
 ### `VerificationError` (verification contract)
 
@@ -2295,6 +2419,7 @@ pub struct TrialOffer {
 | 16 | `DuplicateEvidence` | Evidence hash has already been used in a prior `approve_milestone` call |
 | 17 | `MilestoneLimitExceeded` | Validator has already approved 5 milestones for this player |
 | 18 | `DisputeAlreadyResolved` | Dispute was already resolved and cannot be resolved again |
+| 19 | `PendingAdminNotSet` | `accept_admin` called without a pending proposal |
 
 ### `ProgressError` (progress contract)
 
@@ -2309,6 +2434,7 @@ pub struct TrialOffer {
 | 7 | `PlayerNotFound` | History index out of range |
 | 8 | `Overflow` | History counter overflowed |
 | 9 | `RegistrationCallFailed` | Cross-contract call to registration contract failed when syncing player level |
+| 10 | `PendingAdminNotSet` | `accept_admin` called without a pending proposal |
 
 ### `ScoutAccessError` (scout_access contract)
 
@@ -2333,6 +2459,7 @@ pub struct TrialOffer {
 | 18 | `ContactQuotaExceeded` | Pro-tier scout exceeded monthly contact limit |
 | 19 | `TrialOfferRateLimited` | Trial offer sent to the same player within the 24h cooldown window |
 | 20 | `ProContactLimitReached` | Pro-tier scout reached the contact limit for the current subscription period |
+| 21 | `PendingAdminNotSet` | `accept_admin` called without a pending proposal |
 
 ---
 
@@ -2347,6 +2474,8 @@ pub struct TrialOffer {
 | `scout_verified` | registration | Admin verifies a scout |
 | `player_level_synced` | registration | Progress contract syncs a player's level |
 | `contract_initialized` | verification | Contract initialized |
+| `admin_transfer_proposed` | all four contracts | Current admin proposes a replacement |
+| `admin_transferred` | all four contracts | Pending admin accepts control |
 | `milestone_approved` | verification | Validator confirms a player achievement |
 | `validator_registered` | verification | New validator onboarded |
 | `validator_revoked` | verification | Validator deactivated |
@@ -2355,7 +2484,6 @@ pub struct TrialOffer {
 | `contract_unpaused` | verification / scout_access | Circuit breaker released |
 | `progress_updated` | progress | Player advances one level |
 | `player_level_reset` | progress | Admin resets a player's level |
-| `admin_transferred` | progress / scout_access | Admin rights rotated |
 | `scout_subscribed` | scout_access | Scout purchases a subscription |
 | `player_contacted` | scout_access | Scout unlocks player contact details |
 | `trial_offer_logged` | scout_access | Elite scout records a trial offer |

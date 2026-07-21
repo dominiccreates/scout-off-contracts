@@ -53,6 +53,10 @@ pub enum VerificationError {
     ProgressCallFailed = 12,
     /// Milestone counter overflowed.
     Overflow = 13,
+
+    // ── Admin transfer ──
+    /// `accept_admin` called before an admin transfer was proposed.
+    PendingAdminNotSet = 19,
 }
 
 impl AdminError for VerificationError {

@@ -1,5 +1,5 @@
-use soroban_sdk::contracterror;
 use scoutchain_shared_types::AdminError;
+use soroban_sdk::contracterror;
 
 /// Append-only: do not renumber existing variants. See docs/CONTRIBUTING.md.
 #[contracterror]
@@ -31,6 +31,10 @@ pub enum ProgressError {
     Overflow = 8,
     /// Call to registration contract failed.
     RegistrationCallFailed = 9,
+
+    // ── Admin transfer ──
+    /// `accept_admin` called before an admin transfer was proposed.
+    PendingAdminNotSet = 10,
 }
 
 impl AdminError for ProgressError {

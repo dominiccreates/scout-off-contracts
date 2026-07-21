@@ -153,6 +153,7 @@ Each tier controls which player progress levels a scout can view and what action
 - `update_fee_config(fee_config)` — Adjust subscription and contact fee rates (admin only)
 - `withdraw_fees(to)` — Withdraw accumulated platform fees (admin only)
 - `pause_contract()` / `unpause_contract()` — Emergency circuit breaker (admin only)
+- `propose_admin(new_admin)` / `accept_admin()` — Rotate each contract's admin after the new address proves control
 
 ### Query Functions
 
@@ -466,7 +467,7 @@ When deploying to mainnet, **always verify** `config/mainnet.json` has been upda
 
 1. Test the full deployment flow on testnet first
 2. Verify all addresses in `.env` are correct for mainnet
-3. Confirm `ADMIN_ADDRESS` is the intended account — ownership cannot be transferred after initialization
+3. Confirm `ADMIN_ADDRESS` is the intended account; later rotations use the two-step `propose_admin` + `accept_admin` flow on each contract
 4. Double-check the `XLM_TOKEN_ADDRESS` matches the mainnet address (not testnet). The `scout_access.initialize` call now probes `xlm_token` by invoking `decimals()` on it and returns `InvalidInput` if the address is not a deployed token contract, so a wrong address (testnet SAC on mainnet, a typo, a plain account, or a non-token contract) is caught at deploy time rather than surfacing later as an opaque failure on the first `subscribe()` call.
 
 ## Testing
@@ -571,6 +572,7 @@ Each contract defines its own error enum. The same numeric code can mean differe
 | 11 | `Overflow` | Counter or fee arithmetic overflowed | Use amounts within safe range |
 | 12 | `ScoutNotFound` | Invalid `scout_id` | Verify the `scout_id` from the registration transaction |
 | 13 | `InvalidInput` | Field too long, bad hash count, or empty value | Check field length limits in the function docs |
+| 14 | `PendingAdminNotSet` | `accept_admin` called without a proposal | Call `propose_admin` first |
 
 ### `VerificationError` (verification contract)
 
@@ -590,6 +592,7 @@ Each contract defines its own error enum. The same numeric code can mean differe
 | 12 | `ProgressCallFailed` | Cross-contract `advance_level` failed | Verify the progress contract is deployed and wired |
 | 13 | `Overflow` | Milestone counter overflowed | Contact admin |
 | 14 | `MilestoneNotFound` | Index out of range | Verify index against `get_milestone_count` |
+| 19 | `PendingAdminNotSet` | `accept_admin` called without a proposal | Call `propose_admin` first |
 
 ### `ProgressError` (progress contract)
 
@@ -603,6 +606,7 @@ Each contract defines its own error enum. The same numeric code can mean differe
 | 6 | `AlreadyAtMaxLevel` | Player is already at `EliteTier` | No further advancement possible |
 | 7 | `PlayerNotFound` | History index out of range | Verify index against `get_history_count` |
 | 8 | `Overflow` | History counter overflowed | Contact admin |
+| 10 | `PendingAdminNotSet` | `accept_admin` called without a proposal | Call `propose_admin` first |
 
 ### `ScoutAccessError` (scout_access contract)
 
@@ -624,6 +628,7 @@ Each contract defines its own error enum. The same numeric code can mean differe
 | 15 | `InvalidInput` | Zero or negative fee field in `FeeConfig` | All fee fields and `sub_duration_secs` must be > 0 |
 | 16 | `NoFeesToWithdraw` | No accumulated fees to withdraw | Ensure fees have been collected before withdrawing |
 | 17 | `UpgradeTooSoon` | `subscribe` called before minimum interval elapsed | Wait at least 1 hour between subscribe calls |
+| 21 | `PendingAdminNotSet` | `accept_admin` called without a proposal | Call `propose_admin` first |
 
 ## Events
 
@@ -636,6 +641,8 @@ Each contract defines its own error enum. The same numeric code can mean differe
 | `player_contacted` | Scout pays to unlock player contact details |
 | `trial_offer_logged` | Scout records a trial offer, advancing player to Level 3 |
 | `fees_withdrawn` | Admin withdraws accumulated platform fees |
+| `admin_transfer_proposed` | Current admin proposes a replacement address |
+| `admin_transferred` | Pending admin accepts control |
 
 ## Why Stellar
 

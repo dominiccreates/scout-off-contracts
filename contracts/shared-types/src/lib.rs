@@ -66,11 +66,7 @@ pub trait AdminError {
 /// // Inside a contract function returning Result<(), MyError>:
 /// let admin = require_admin(&env, &DataKey::Admin, ADMIN_BUMP_LEDGERS)?;
 /// ```
-pub fn require_admin<K, E>(
-    env: &Env,
-    admin_key: &K,
-    admin_bump_ledgers: u32,
-) -> Result<Address, E>
+pub fn require_admin<K, E>(env: &Env, admin_key: &K, admin_bump_ledgers: u32) -> Result<Address, E>
 where
     K: IntoVal<Env, soroban_sdk::Val>,
     E: AdminError,
@@ -119,7 +115,7 @@ pub fn validate_cid(hash: &String) -> Result<(), &'static str> {
             }
         }
         Ok(())
-   } else if starts_with_bafy {
+    } else if starts_with_bafy {
         // CIDv1 (base32): 59–128 chars.
         //
         // Unlike CIDv0, this branch does NOT perform per-character base32
@@ -145,8 +141,7 @@ pub fn validate_cid(hash: &String) -> Result<(), &'static str> {
             return Err("invalid cid: CIDv1 must be 59–128 characters");
         }
         Ok(())
-    }
-    else {
+    } else {
         Err("invalid cid: must start with 'Qm' (CIDv0) or 'bafy' (CIDv1)")
     }
 }

@@ -78,6 +78,8 @@ pub struct FeeConfig {
 #[contracttype]
 pub enum DataKey {
     Admin,
+    /// Proposed replacement admin awaiting acceptance by that address.
+    PendingAdmin,
     Initialized,
     Paused,
     FeeConfig,
