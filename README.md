@@ -1,8 +1,9 @@
 # ScoutChain
 
 [![Soroban Contract CI](https://github.com/scout-off/scout-off-contracts/actions/workflows/contract-ci.yml/badge.svg)](https://github.com/scout-off/scout-off-contracts/actions/workflows/contract-ci.yml)
+[![CI](https://github.com/scout-off/scout-off-contracts/actions/workflows/ci.yml/badge.svg)](https://github.com/scout-off/scout-off-contracts/actions/workflows/ci.yml)
 
-Decentralized football talent scouting platform on Stellar — tamper-proof player profiles, on-chain progress verification, and direct scout-to-player connections powered by Soroban smart contracts.
+Core Soroban (Rust) smart contracts powering the Scouting Platform on the Stellar network. Manages decentralized talent identities, maps tamper-proof progress metrics, handles validator verification signatures, and governs scout platform access.
 
 ## Overview
 
@@ -382,18 +383,23 @@ See `bindings/README.md` for usage details.
 
 ## Database Schema
 
-`migrations/001_initial_schema.sql` creates the nine PostgreSQL tables the backend event indexer needs:
+`migrations/001_initial_schema.sql` creates the fourteen PostgreSQL tables the backend event indexer needs:
 
 | Table | Purpose |
 |-------|---------|
 | `players` | Cached player profiles, indexed by region/position/level for fast filtering |
+| `player_level_history` | Audit trail of level changes, tagged by source (`advance` vs admin `reset`) |
 | `scouts` | Scout profiles |
 | `validators` | Trusted validator registry |
+| `validator_history` | Audit trail of validator restore and wallet-transfer events |
 | `milestones` | Approved milestone records per player |
+| `milestone_disputes` | Player-filed milestone disputes and their resolution status |
 | `scout_subscriptions` | Active subscription records |
+| `fee_config_history` | Audit trail of scout_access fee configuration changes |
 | `contact_records` | Pay-to-contact audit log |
 | `trial_offers` | On-chain trial offer records |
 | `fee_withdrawals` | Platform fee withdrawal audit log |
+| `admin_transfers` | Audit trail of admin rotations across contracts |
 | `indexer_cursor` | Horizon event stream checkpoint (single row) |
 
 Run it against your backend PostgreSQL instance:
@@ -402,7 +408,7 @@ Run it against your backend PostgreSQL instance:
 psql $DATABASE_URL -f migrations/001_initial_schema.sql
 ```
 
-
+The migration is idempotent and safe to re-run against an already-migrated database: every table and index uses `IF NOT EXISTS`, and the seed row uses `ON CONFLICT DO NOTHING`.
 
 1. **Player Onboarding**
    - Connect Freighter wallet via SEP-10
@@ -461,7 +467,7 @@ When deploying to mainnet, **always verify** `config/mainnet.json` has been upda
 1. Test the full deployment flow on testnet first
 2. Verify all addresses in `.env` are correct for mainnet
 3. Confirm `ADMIN_ADDRESS` is the intended account — ownership cannot be transferred after initialization
-4. Double-check the `XLM_TOKEN_ADDRESS` matches the mainnet address (not testnet)
+4. Double-check the `XLM_TOKEN_ADDRESS` matches the mainnet address (not testnet). The `scout_access.initialize` call now probes `xlm_token` by invoking `decimals()` on it and returns `InvalidInput` if the address is not a deployed token contract, so a wrong address (testnet SAC on mainnet, a typo, a plain account, or a non-token contract) is caught at deploy time rather than surfacing later as an opaque failure on the first `subscribe()` call.
 
 ## Testing
 
@@ -584,6 +590,9 @@ Each contract defines its own error enum. The same numeric code can mean differe
 | 12 | `ProgressCallFailed` | Cross-contract `advance_level` failed | Verify the progress contract is deployed and wired |
 | 13 | `Overflow` | Milestone counter overflowed | Contact admin |
 | 14 | `MilestoneNotFound` | Index out of range | Verify index against `get_milestone_count` |
+| 15 | `ValidatorCapReached` | 100-validator platform limit reached | Contract upgrade required to raise the cap; contact admin |
+| 16 | `DuplicateEvidence` | Evidence hash already used in a prior `approve_milestone` call | Use a unique evidence CID for each milestone approval |
+| 17 | `MilestoneLimitExceeded` | Validator has already approved 5 milestones for this player | A different validator must approve further milestones for this player |
 
 ### `ProgressError` (progress contract)
 
@@ -597,6 +606,7 @@ Each contract defines its own error enum. The same numeric code can mean differe
 | 6 | `AlreadyAtMaxLevel` | Player is already at `EliteTier` | No further advancement possible |
 | 7 | `PlayerNotFound` | History index out of range | Verify index against `get_history_count` |
 | 8 | `Overflow` | History counter overflowed | Contact admin |
+| 9 | `RegistrationCallFailed` | Cross-contract call to registration contract failed | Verify the registration contract is deployed and wired |
 
 ### `ScoutAccessError` (scout_access contract)
 
@@ -618,6 +628,9 @@ Each contract defines its own error enum. The same numeric code can mean differe
 | 15 | `InvalidInput` | Zero or negative fee field in `FeeConfig` | All fee fields and `sub_duration_secs` must be > 0 |
 | 16 | `NoFeesToWithdraw` | No accumulated fees to withdraw | Ensure fees have been collected before withdrawing |
 | 17 | `UpgradeTooSoon` | `subscribe` called before minimum interval elapsed | Wait at least 1 hour between subscribe calls |
+| 18 | `ContactQuotaExceeded` | Scout has hit the platform-wide contact quota for the current period | Wait for the quota window to reset or contact admin |
+| 19 | `TrialOfferRateLimited` | Scout sent a trial offer to the same player within the cooldown window | Wait for the cooldown period to expire before retrying |
+| 20 | `ProContactLimitReached` | Pro-tier scout has reached the `pro_contact_limit` contacts for the current subscription period | Upgrade to Elite (no limit applies) or wait for subscription to renew |
 
 ## Events
 
@@ -651,7 +664,8 @@ MIT
 
 ## Support
 
-- GitHub Issues: [Create an issue](https://github.com/scout-off/scout-off-contracts/issues)
+- GitHub Issues: [Create an issue](https://github.com/your-org/scoutchain/issues)
+- **Security Reports**: See [SECURITY.md](SECURITY.md) for our security policy and private vulnerability reporting process
 - Stellar Discord: https://discord.gg/stellar
 - Stellar Developers: https://developers.stellar.org
 

@@ -11,10 +11,12 @@ use types::{
 
 use soroban_sdk::{contract, contractimpl, Address, Env, String, Vec};
 
+use scoutchain_shared_types::require_admin;
+
 // Generated client stub for the progress contract — used to resolve a player's
 // current level at read time.  `level` is never stored in this contract.
 mod progress_contract {
-    use scoutchain_shared_types::ProgressLevel;
+    use scoutchain_shared_types::{require_admin, ProgressLevel};
     use soroban_sdk::{contractclient, Env};
 
     #[contractclient(name = "Client")]
@@ -86,13 +88,13 @@ impl RegistrationContract {
     }
 
     pub fn pause_contract(env: Env) -> Result<(), ScoutChainError> {
-        Self::require_admin(&env)?;
+        require_admin(&env, &DataKey::Admin, ADMIN_BUMP_LEDGERS)?;
         env.storage().instance().set(&DataKey::Paused, &true);
         Ok(())
     }
 
     pub fn unpause_contract(env: Env) -> Result<(), ScoutChainError> {
-        Self::require_admin(&env)?;
+        require_admin(&env, &DataKey::Admin, ADMIN_BUMP_LEDGERS)?;
         env.storage().instance().set(&DataKey::Paused, &false);
         Ok(())
     }
@@ -103,7 +105,7 @@ impl RegistrationContract {
         env: Env,
         new_wasm_hash: soroban_sdk::BytesN<32>,
     ) -> Result<(), ScoutChainError> {
-        Self::require_admin(&env)?;
+        require_admin(&env, &DataKey::Admin, ADMIN_BUMP_LEDGERS)?;
         env.deployer().update_current_contract_wasm(new_wasm_hash);
         Ok(())
     }
@@ -111,7 +113,7 @@ impl RegistrationContract {
     /// Store the progress contract address so filter_players can resolve
     /// levels at query time (admin only).
     pub fn set_progress_contract(env: Env, addr: Address) -> Result<(), ScoutChainError> {
-        Self::require_admin(&env)?;
+        require_admin(&env, &DataKey::Admin, ADMIN_BUMP_LEDGERS)?;
         env.storage()
             .instance()
             .set(&DataKey::ProgressContract, &addr);
@@ -277,7 +279,7 @@ impl RegistrationContract {
 
     /// Deregister a player profile (admin only, GDPR right-to-erasure).
     pub fn deregister_player(env: Env, player_id: u64) -> Result<(), ScoutChainError> {
-        Self::require_admin(&env)?;
+        require_admin(&env, &DataKey::Admin, ADMIN_BUMP_LEDGERS)?;
         let profile = Self::load_stored_player(&env, player_id)?;
         // Resolve level before removing storage keys (progress contract is source of truth)
         let level = Self::resolve_level(&env, player_id);
@@ -314,12 +316,13 @@ impl RegistrationContract {
     /// to skip this player. The on-chain profile, progress history, and all
     /// milestone data are fully preserved and still accessible via `get_player`.
     pub fn deactivate_player(env: Env, player_id: u64) -> Result<(), ScoutChainError> {
-        Self::require_admin(&env)?;
+        require_admin(&env, &DataKey::Admin, ADMIN_BUMP_LEDGERS)?;
         // Ensure the player actually exists before setting the flag.
         Self::load_stored_player(&env, player_id)?;
         env.storage()
             .persistent()
             .set(&DataKey::PlayerDeactivated(player_id), &true);
+        events::player_deactivated(&env, player_id);
         Ok(())
     }
 
@@ -328,12 +331,13 @@ impl RegistrationContract {
     /// Clears the `PlayerDeactivated(player_id)` flag, making the player
     /// visible in `filter_players` results again.
     pub fn reactivate_player(env: Env, player_id: u64) -> Result<(), ScoutChainError> {
-        Self::require_admin(&env)?;
+        require_admin(&env, &DataKey::Admin, ADMIN_BUMP_LEDGERS)?;
         // Ensure the player actually exists.
         Self::load_stored_player(&env, player_id)?;
         env.storage()
             .persistent()
             .remove(&DataKey::PlayerDeactivated(player_id));
+        events::player_reactivated(&env, player_id);
         Ok(())
     }
 
@@ -448,7 +452,7 @@ impl RegistrationContract {
 
     /// Verify a scout profile (admin only).
     pub fn verify_scout(env: Env, scout_id: u64) -> Result<(), ScoutChainError> {
-        Self::require_admin(&env)?;
+        require_admin(&env, &DataKey::Admin, ADMIN_BUMP_LEDGERS)?;
         let mut profile: ScoutProfile = env
             .storage()
             .persistent()
@@ -668,20 +672,6 @@ impl RegistrationContract {
         Ok(())
     }
 
-    fn require_admin(env: &Env) -> Result<(), ScoutChainError> {
-        let admin: Address = env
-            .storage()
-            .persistent()
-            .get(&DataKey::Admin)
-            .ok_or(ScoutChainError::NotInitialized)?;
-        admin.require_auth();
-        env.storage().persistent().extend_ttl(
-            &DataKey::Admin,
-            ADMIN_BUMP_LEDGERS,
-            ADMIN_BUMP_LEDGERS,
-        );
-        Ok(())
-    }
 
     fn load_stored_player(
         env: &Env,
@@ -1846,6 +1836,70 @@ mod tests {
             result_reactivated.profiles.get(0).unwrap().player_id,
             player_id
         );
+    }
+
+    // -------------------------------------------------------------------------
+    // Issue #647: player_deactivated and player_reactivated event emission
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn test_deactivate_player_emits_event() {
+        use soroban_sdk::testutils::Events;
+        use soroban_sdk::IntoVal;
+        let (env, client) = setup();
+        let admin = Address::generate(&env);
+        client.initialize(&admin);
+
+        let wallet = Address::generate(&env);
+        let hashes = vec![&env, String::from_str(&env, "QmTest")];
+        let player_id = client.register_player(&wallet, &dummy_vitals(&env), &hashes);
+
+        // Clear any events from registration so we only inspect deactivation events.
+        let _ = env.events().all();
+
+        client.deactivate_player(&player_id);
+
+        let events = env.events().all();
+        assert_eq!(events.len(), 1, "expected exactly one event from deactivate_player");
+
+        let (topics, data) = events.get(0).unwrap();
+        // Topic[0] should be the symbol "player_deactivated"
+        assert_eq!(
+            topics.get(0).unwrap(),
+            soroban_sdk::Symbol::new(&env, "player_deactivated").into_val(&env),
+        );
+        // Data should be the player_id
+        assert_eq!(data, player_id.into_val(&env));
+    }
+
+    #[test]
+    fn test_reactivate_player_emits_event() {
+        use soroban_sdk::testutils::Events;
+        use soroban_sdk::IntoVal;
+        let (env, client) = setup();
+        let admin = Address::generate(&env);
+        client.initialize(&admin);
+
+        let wallet = Address::generate(&env);
+        let hashes = vec![&env, String::from_str(&env, "QmTest")];
+        let player_id = client.register_player(&wallet, &dummy_vitals(&env), &hashes);
+
+        client.deactivate_player(&player_id);
+
+        // Clear events up to this point.
+        let _ = env.events().all();
+
+        client.reactivate_player(&player_id);
+
+        let events = env.events().all();
+        assert_eq!(events.len(), 1, "expected exactly one event from reactivate_player");
+
+        let (topics, data) = events.get(0).unwrap();
+        assert_eq!(
+            topics.get(0).unwrap(),
+            soroban_sdk::Symbol::new(&env, "player_reactivated").into_val(&env),
+        );
+        assert_eq!(data, player_id.into_val(&env));
     }
 
     // -------------------------------------------------------------------------
