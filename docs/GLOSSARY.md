@@ -44,9 +44,15 @@ adjustable via `update_fee_config`.
 | `pro_sub_stroops` | `i128` | stroops | > 0 | `3000000` (0.3 XLM) |
 | `elite_sub_stroops` | `i128` | stroops | > 0 | `7000000` (0.7 XLM) |
 | `sub_duration_secs` | `u64` | seconds | > 0 | `2592000` (30 days) |
+| `pro_contact_limit` | `u32` | contacts per subscription period | > 0 | `10` |
 
 All fields must be strictly greater than zero; `initialize` and
 `update_fee_config` return `InvalidInput` otherwise.
+
+`pro_contact_limit` caps the number of unique players a **Pro-tier** scout
+may contact in a single subscription period. Reaching the limit causes
+`pay_to_contact` to return `ProContactLimitReached` (code 20). **Elite-tier
+scouts are exempt** from this cap.
 
 - Relevant functions: `initialize`, `update_fee_config`, `get_fee_config` — see
   [CONTRACT_REFERENCE.md](CONTRACT_REFERENCE.md#scout_access).

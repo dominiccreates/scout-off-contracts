@@ -1326,11 +1326,18 @@ greater than zero; either function returns `InvalidInput` otherwise.
 | `pro_sub_stroops` | `i128` | stroops | > 0 | `3000000` (0.3 XLM) |
 | `elite_sub_stroops` | `i128` | stroops | > 0 | `7000000` (0.7 XLM) |
 | `sub_duration_secs` | `u64` | seconds | > 0 | `2592000` (30 days = 30 × 24 × 3600) |
+| `pro_contact_limit` | `u32` | contacts per subscription period | > 0 | `10` |
 
 **Validation rules:**
 - Every `i128` fee field must be > 0 (zero or negative → `InvalidInput` error code 15).
 - `sub_duration_secs` must be > 0 (zero → `InvalidInput`).
-- There is no enforced upper bound, but values larger than the XLM supply
+- `pro_contact_limit` must be > 0 (zero → `InvalidInput`). This field caps the
+  number of unique players a **Pro-tier** scout may contact within a single
+  subscription period. Once the limit is reached, `pay_to_contact` returns
+  `ProContactLimitReached` (code 20) for that scout until their subscription
+  renews. **Elite-tier scouts are exempt** from this limit and may contact any
+  number of players regardless of `pro_contact_limit`.
+- There is no enforced upper bound on fee fields, but values larger than the XLM supply
   (≈ 500 000 000 XLM = 5 × 10¹⁵ stroops) will cause `Overflow` errors at fee
   settlement time.
 
@@ -1355,7 +1362,7 @@ stellar contract invoke --id $SCOUT_ACCESS_CONTRACT_ID \
   -- initialize \
   --admin $ADMIN_ADDRESS \
   --xlm_token $XLM_TOKEN_ADDRESS \
-  --fee_config '{"contact_fee_stroops":100000,"basic_sub_stroops":1000000,"pro_sub_stroops":3000000,"elite_sub_stroops":7000000,"sub_duration_secs":2592000}'
+  --fee_config '{"contact_fee_stroops":100000,"basic_sub_stroops":1000000,"pro_sub_stroops":3000000,"elite_sub_stroops":7000000,"sub_duration_secs":2592000,"pro_contact_limit":10}'
 ```
 
 ---
@@ -1406,7 +1413,7 @@ Adjust subscription and contact fee rates. Same validation rules as
 ```bash
 stellar contract invoke --id $SCOUT_ACCESS_CONTRACT_ID \
   -- update_fee_config \
-  --fee_config '{"contact_fee_stroops":200000,"basic_sub_stroops":2000000,"pro_sub_stroops":5000000,"elite_sub_stroops":10000000,"sub_duration_secs":2592000}'
+  --fee_config '{"contact_fee_stroops":200000,"basic_sub_stroops":2000000,"pro_sub_stroops":5000000,"elite_sub_stroops":10000000,"sub_duration_secs":2592000,"pro_contact_limit":20}'
 ```
 
 ---
@@ -1479,10 +1486,16 @@ stellar contract invoke --id $SCOUT_ACCESS_CONTRACT_ID \
 Pay a micro-fee to unlock a player's contact details. Scout must have an active
 (non-expired) subscription.
 
+**Pro-tier contact limit**: Pro-tier scouts are capped at `pro_contact_limit`
+unique player contacts per subscription period (configured in `FeeConfig`).
+Once the limit is reached, further `pay_to_contact` calls return
+`ProContactLimitReached` (code 20) until the subscription renews. Elite-tier
+scouts are **exempt** from this limit.
+
 | | |
 |---|---|
 | **Auth** | `scout` must sign |
-| **Errors** | `ContractPaused` · `ScoutNotSubscribed` · `SubscriptionExpired` · `AlreadyContacted` · `Overflow` |
+| **Errors** | `ContractPaused` · `ScoutNotSubscribed` · `SubscriptionExpired` · `AlreadyContacted` · `ContactQuotaExceeded` (code 18) · `ProContactLimitReached` (code 20, Pro tier only) · `Overflow` |
 
 ```bash
 stellar contract invoke --id $SCOUT_ACCESS_CONTRACT_ID \
