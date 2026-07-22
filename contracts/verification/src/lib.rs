@@ -94,6 +94,52 @@ impl VerificationContract {
         Ok(())
     }
 
+    /// Propose a replacement administrator. The current admin remains active
+    /// until the proposed address calls `accept_admin`.
+    pub fn propose_admin(env: Env, new_admin: Address) -> Result<(), VerificationError> {
+        let old_admin = require_admin(&env, &DataKey::Admin, ADMIN_BUMP_LEDGERS)?;
+        env.storage()
+            .persistent()
+            .set(&DataKey::PendingAdmin, &new_admin);
+        env.storage().persistent().extend_ttl(
+            &DataKey::PendingAdmin,
+            ADMIN_BUMP_LEDGERS,
+            ADMIN_BUMP_LEDGERS,
+        );
+        events::admin_transfer_proposed(&env, &old_admin, &new_admin);
+        Ok(())
+    }
+
+    /// Accept a pending admin transfer. Only the proposed address can accept.
+    pub fn accept_admin(env: Env) -> Result<(), VerificationError> {
+        let old_admin: Address = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Admin)
+            .ok_or(VerificationError::NotInitialized)?;
+        let new_admin: Address = env
+            .storage()
+            .persistent()
+            .get(&DataKey::PendingAdmin)
+            .ok_or(VerificationError::PendingAdminNotSet)?;
+        new_admin.require_auth();
+        env.storage().persistent().set(&DataKey::Admin, &new_admin);
+        env.storage().persistent().extend_ttl(
+            &DataKey::Admin,
+            ADMIN_BUMP_LEDGERS,
+            ADMIN_BUMP_LEDGERS,
+        );
+        env.storage().persistent().remove(&DataKey::PendingAdmin);
+        events::admin_transferred(&env, &old_admin, &new_admin);
+        Ok(())
+    }
+
+    /// Deprecated alias for `propose_admin`; this no longer transfers control
+    /// immediately. The proposed address must still call `accept_admin`.
+    pub fn transfer_admin(env: Env, new_admin: Address) -> Result<(), VerificationError> {
+        Self::propose_admin(env, new_admin)
+    }
+
     /// Store the progress contract address so approve_milestone can call it.
     /// Must be called after both contracts are deployed (admin only).
     /// Returns AlreadyConfigured if called more than once — use update_progress_contract instead.
@@ -1032,7 +1078,7 @@ impl VerificationContract {
 mod tests {
     use super::*;
     use soroban_sdk::{
-        testutils::{Address as _, Events, Ledger},
+        testutils::{Address as _, Events, Ledger, MockAuth, MockAuthInvoke},
         Env, IntoVal, String, Symbol,
     };
 
@@ -1056,6 +1102,100 @@ mod tests {
     const VALID_CID_V0_3: &str = "QmABCDEFGHJKLMNPQRSTUVWXYZ123456789abcdefghijk";
     // A valid CIDv1 (>= 59 chars starting with "bafy").
     const VALID_CID_V1: &str = "bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi";
+
+    #[test]
+    fn test_admin_transfer_propose_replace_and_accept() {
+        let (env, client) = setup();
+        let old_admin = Address::generate(&env);
+        let stale_admin = Address::generate(&env);
+        let new_admin = Address::generate(&env);
+        client.initialize(&old_admin);
+
+        client.propose_admin(&stale_admin);
+        assert_eq!(
+            env.events().all(),
+            soroban_sdk::vec![
+                &env,
+                (
+                    client.address.clone(),
+                    (Symbol::new(&env, events::ADMIN_TRANSFER_PROPOSED),).into_val(&env),
+                    (old_admin.clone(), stale_admin).into_val(&env),
+                )
+            ]
+        );
+
+        client.pause_contract();
+        client.unpause_contract();
+
+        client.propose_admin(&new_admin);
+        env.as_contract(&client.address, || {
+            assert_eq!(
+                env.storage()
+                    .persistent()
+                    .get::<DataKey, Address>(&DataKey::Admin),
+                Some(old_admin.clone())
+            );
+            assert_eq!(
+                env.storage()
+                    .persistent()
+                    .get::<DataKey, Address>(&DataKey::PendingAdmin),
+                Some(new_admin.clone())
+            );
+        });
+
+        env.mock_auths(&[MockAuth {
+            address: &new_admin,
+            invoke: &MockAuthInvoke {
+                contract: &client.address,
+                fn_name: "accept_admin",
+                args: soroban_sdk::vec![&env],
+                sub_invokes: &[],
+            },
+        }]);
+        client.accept_admin();
+        assert_eq!(
+            env.events().all(),
+            soroban_sdk::vec![
+                &env,
+                (
+                    client.address.clone(),
+                    (Symbol::new(&env, events::ADMIN_TRANSFERRED),).into_val(&env),
+                    (old_admin, new_admin.clone()).into_val(&env),
+                )
+            ]
+        );
+        env.as_contract(&client.address, || {
+            assert_eq!(
+                env.storage()
+                    .persistent()
+                    .get::<DataKey, Address>(&DataKey::Admin),
+                Some(new_admin)
+            );
+            assert!(!env.storage().persistent().has(&DataKey::PendingAdmin));
+        });
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_third_party_cannot_accept_admin() {
+        let (env, client) = setup();
+        let old_admin = Address::generate(&env);
+        let pending_admin = Address::generate(&env);
+        let third_party = Address::generate(&env);
+        client.initialize(&old_admin);
+        client.propose_admin(&pending_admin);
+
+        env.mock_auths(&[MockAuth {
+            address: &third_party,
+            invoke: &MockAuthInvoke {
+                contract: &client.address,
+                fn_name: "accept_admin",
+                args: soroban_sdk::vec![&env],
+                sub_invokes: &[],
+            },
+        }]);
+        client.accept_admin();
+    }
 
     // -------------------------------------------------------------------------
     // Issue #659: Validator milestone pagination tests

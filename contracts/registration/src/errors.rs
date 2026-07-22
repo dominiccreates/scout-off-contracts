@@ -41,6 +41,10 @@ pub enum ScoutChainError {
     InvalidInput = 13,
     /// Counter or fee arithmetic overflowed.
     Overflow = 11,
+
+    // ── Admin transfer ──
+    /// `accept_admin` called before an admin transfer was proposed.
+    PendingAdminNotSet = 14,
 }
 
 impl AdminError for ScoutChainError {

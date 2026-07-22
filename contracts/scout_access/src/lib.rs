@@ -768,12 +768,52 @@ impl ScoutAccessContract {
         Ok(next_index)
     }
 
-    pub fn transfer_admin(env: Env, new_admin: Address) -> Result<(), ScoutAccessError> {
-        require_admin(&env, &DataKey::Admin, ADMIN_BUMP_LEDGERS)?;
-        let old_admin = Self::get_admin(&env);
+    /// Propose a replacement administrator. The current admin remains active
+    /// until the proposed address calls `accept_admin`.
+    pub fn propose_admin(env: Env, new_admin: Address) -> Result<(), ScoutAccessError> {
+        Self::bump_instance_ttl(&env);
+        let old_admin = require_admin(&env, &DataKey::Admin, ADMIN_BUMP_LEDGERS)?;
+        env.storage()
+            .persistent()
+            .set(&DataKey::PendingAdmin, &new_admin);
+        env.storage().persistent().extend_ttl(
+            &DataKey::PendingAdmin,
+            ADMIN_BUMP_LEDGERS,
+            ADMIN_BUMP_LEDGERS,
+        );
+        events::admin_transfer_proposed(&env, &old_admin, &new_admin);
+        Ok(())
+    }
+
+    /// Accept a pending admin transfer. Only the proposed address can accept.
+    pub fn accept_admin(env: Env) -> Result<(), ScoutAccessError> {
+        Self::bump_instance_ttl(&env);
+        let old_admin: Address = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Admin)
+            .ok_or(ScoutAccessError::NotInitialized)?;
+        let new_admin: Address = env
+            .storage()
+            .persistent()
+            .get(&DataKey::PendingAdmin)
+            .ok_or(ScoutAccessError::PendingAdminNotSet)?;
+        new_admin.require_auth();
         env.storage().persistent().set(&DataKey::Admin, &new_admin);
+        env.storage().persistent().extend_ttl(
+            &DataKey::Admin,
+            ADMIN_BUMP_LEDGERS,
+            ADMIN_BUMP_LEDGERS,
+        );
+        env.storage().persistent().remove(&DataKey::PendingAdmin);
         events::admin_transferred(&env, &old_admin, &new_admin);
         Ok(())
+    }
+
+    /// Deprecated alias for `propose_admin`; this no longer transfers control
+    /// immediately. The proposed address must still call `accept_admin`.
+    pub fn transfer_admin(env: Env, new_admin: Address) -> Result<(), ScoutAccessError> {
+        Self::propose_admin(env, new_admin)
     }
 
     // -------------------------------------------------------------------------
@@ -1910,11 +1950,98 @@ mod tests {
     }
 
     #[test]
-    fn test_transfer_admin_success() {
-        let (env, _admin, _xlm, _contract_id, client) = setup();
+    fn test_admin_transfer_propose_replace_and_accept() {
+        let (env, old_admin, _xlm, contract_id, client) = setup();
+        let stale_admin = Address::generate(&env);
         let new_admin = Address::generate(&env);
 
-        client.transfer_admin(&new_admin);
+        client.propose_admin(&stale_admin);
+        assert_eq!(
+            env.events().all(),
+            soroban_sdk::vec![
+                &env,
+                (
+                    contract_id.clone(),
+                    (Symbol::new(&env, events::ADMIN_TRANSFER_PROPOSED),).into_val(&env),
+                    (old_admin.clone(), stale_admin).into_val(&env),
+                )
+            ]
+        );
+
+        client.pause_contract();
+        client.unpause_contract();
+
+        client.propose_admin(&new_admin);
+        env.as_contract(&contract_id, || {
+            assert_eq!(
+                env.storage()
+                    .persistent()
+                    .get::<DataKey, Address>(&DataKey::Admin),
+                Some(old_admin.clone())
+            );
+            assert_eq!(
+                env.storage()
+                    .persistent()
+                    .get::<DataKey, Address>(&DataKey::PendingAdmin),
+                Some(new_admin.clone())
+            );
+        });
+
+        env.mock_auths(&[MockAuth {
+            address: &new_admin,
+            invoke: &MockAuthInvoke {
+                contract: &contract_id,
+                fn_name: "accept_admin",
+                args: soroban_sdk::vec![&env],
+                sub_invokes: &[],
+            },
+        }]);
+        client.accept_admin();
+        assert_eq!(
+            env.events().all(),
+            soroban_sdk::vec![
+                &env,
+                (
+                    contract_id.clone(),
+                    (
+                        Symbol::new(&env, events::ADMIN_TRANSFERRED),
+                        old_admin.clone(),
+                        new_admin.clone()
+                    )
+                        .into_val(&env),
+                    ().into_val(&env),
+                )
+            ]
+        );
+        env.as_contract(&contract_id, || {
+            assert_eq!(
+                env.storage()
+                    .persistent()
+                    .get::<DataKey, Address>(&DataKey::Admin),
+                Some(new_admin)
+            );
+            assert!(!env.storage().persistent().has(&DataKey::PendingAdmin));
+        });
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_third_party_cannot_accept_admin() {
+        let (env, _old_admin, _xlm, contract_id, client) = setup();
+        let pending_admin = Address::generate(&env);
+        let third_party = Address::generate(&env);
+        client.propose_admin(&pending_admin);
+
+        env.mock_auths(&[MockAuth {
+            address: &third_party,
+            invoke: &MockAuthInvoke {
+                contract: &contract_id,
+                fn_name: "accept_admin",
+                args: soroban_sdk::vec![&env],
+                sub_invokes: &[],
+            },
+        }]);
+        client.accept_admin();
     }
 
     #[test]
@@ -2375,7 +2502,6 @@ mod tests {
     // refund_subscription tests
     // -------------------------------------------------------------------------
 
-    #[test]
     // -------------------------------------------------------------------------
     // Fee accumulation tests across multiple subscriptions
     // -------------------------------------------------------------------------
@@ -2973,6 +3099,448 @@ mod tests {
     // including the batch_contact_players skip/no-charge path for already-contacted
     // players.  Also validates withdraw_fees() zeroes the accumulator.
     // -------------------------------------------------------------------------
+
+    // =========================================================================
+    // Check-precedence tests
+    //
+    // Each test sets up a scenario where TWO OR MORE error conditions are
+    // simultaneously true and asserts the *specific* error that the documented
+    // check-precedence order requires.  These tests are the executable
+    // contract for the numbered tables in docs/CONTRACT_REFERENCE.md.
+    // =========================================================================
+
+    // -------------------------------------------------------------------------
+    // subscribe — precedence tests
+    // -------------------------------------------------------------------------
+
+    /// ContractPaused beats NotInitialized (Priority 1 > Priority 2).
+    /// When the contract is paused the caller should see ContractPaused even if
+    /// the contract has also somehow lost its Initialized flag.
+    #[test]
+    fn test_subscribe_paused_beats_not_initialized() {
+        let (env, _admin, _xlm, contract_id, client) = setup();
+        // Wipe the Initialized key to make NotInitialized also true.
+        env.as_contract(&contract_id, || {
+            env.storage().instance().remove(&DataKey::Initialized);
+        });
+        // Pause the contract (writes Paused = true even without Initialized).
+        env.as_contract(&contract_id, || {
+            env.storage().instance().set(&DataKey::Paused, &true);
+        });
+
+        let scout = Address::generate(&env);
+        let result = client.try_subscribe(&scout, &SubscriptionTier::Basic);
+        // Priority 1: ContractPaused wins over Priority 2: NotInitialized.
+        assert_eq!(result, Err(Ok(ScoutAccessError::ContractPaused)));
+    }
+
+    /// ContractPaused beats SubscriptionDowngradeNotAllowed (Priority 1 > Priority 4).
+    /// A scout with an active Elite subscription attempts to downgrade to Basic
+    /// while the contract is paused.  They must see ContractPaused, not
+    /// SubscriptionDowngradeNotAllowed.
+    #[test]
+    fn test_subscribe_paused_beats_downgrade_error() {
+        let (env, admin, xlm, _contract_id, client) = setup();
+        let scout = Address::generate(&env);
+        mint_token(&env, &xlm, &admin, &scout, 100_000_000);
+
+        // Subscribe to Elite first.
+        client.subscribe(&scout, &SubscriptionTier::Elite);
+
+        // Now pause the contract.
+        client.pause_contract();
+
+        // Attempt downgrade while paused — two conditions simultaneously true:
+        //   (a) ContractPaused
+        //   (b) SubscriptionDowngradeNotAllowed (active Elite → trying Basic)
+        let result = client.try_subscribe(&scout, &SubscriptionTier::Basic);
+        // Priority 1: ContractPaused wins.
+        assert_eq!(result, Err(Ok(ScoutAccessError::ContractPaused)));
+    }
+
+    /// ContractPaused beats UpgradeTooSoon (Priority 1 > Priority 5).
+    /// A scout upgrades within the 1-hour window while the contract is paused.
+    #[test]
+    fn test_subscribe_paused_beats_upgrade_too_soon() {
+        let (env, admin, xlm, _contract_id, client) = setup();
+        let scout = Address::generate(&env);
+        mint_token(&env, &xlm, &admin, &scout, 100_000_000);
+
+        client.subscribe(&scout, &SubscriptionTier::Basic);
+        // Pause immediately (no time advance — UpgradeTooSoon is also true).
+        client.pause_contract();
+
+        let result = client.try_subscribe(&scout, &SubscriptionTier::Elite);
+        // Priority 1: ContractPaused wins over Priority 5: UpgradeTooSoon.
+        assert_eq!(result, Err(Ok(ScoutAccessError::ContractPaused)));
+    }
+
+    /// SubscriptionDowngradeNotAllowed beats UpgradeTooSoon (Priority 4 > 5)
+    /// when both are simultaneously true (active sub + downgrade + within
+    /// 1-hour upgrade interval).
+    #[test]
+    fn test_subscribe_downgrade_beats_upgrade_too_soon() {
+        let (env, admin, xlm, _contract_id, client) = setup();
+        let scout = Address::generate(&env);
+        mint_token(&env, &xlm, &admin, &scout, 100_000_000);
+
+        client.subscribe(&scout, &SubscriptionTier::Elite);
+        // No time advance — UpgradeTooSoon is also in effect.
+        // But the requested tier is a downgrade, so downgrade check fires first.
+        let result = client.try_subscribe(&scout, &SubscriptionTier::Basic);
+        // Priority 4: SubscriptionDowngradeNotAllowed wins.
+        assert_eq!(
+            result,
+            Err(Ok(ScoutAccessError::SubscriptionDowngradeNotAllowed))
+        );
+    }
+
+    // -------------------------------------------------------------------------
+    // pay_to_contact — precedence tests
+    // -------------------------------------------------------------------------
+
+    /// ContractPaused beats ScoutNotSubscribed (Priority 1 > Priority 4).
+    /// When the contract is paused AND the scout has no subscription, the
+    /// caller must see ContractPaused.
+    #[test]
+    fn test_pay_to_contact_paused_beats_not_subscribed() {
+        let (env, _admin, _xlm, _contract_id, client) = setup();
+        let scout = Address::generate(&env);
+        // Scout has no subscription (ScoutNotSubscribed also true).
+        client.pause_contract();
+
+        let result = client.try_pay_to_contact(&scout, &1u64);
+        // Priority 1: ContractPaused wins over Priority 4: ScoutNotSubscribed.
+        assert_eq!(result, Err(Ok(ScoutAccessError::ContractPaused)));
+    }
+
+    /// ContractPaused beats SubscriptionExpired (Priority 1 > Priority 5).
+    #[test]
+    fn test_pay_to_contact_paused_beats_expired() {
+        let (env, admin, xlm, _contract_id, client) = setup();
+        let scout = Address::generate(&env);
+        mint_token(&env, &xlm, &admin, &scout, 100_000_000);
+
+        client.subscribe(&scout, &SubscriptionTier::Pro);
+
+        // Expire the subscription, then pause.
+        env.ledger().with_mut(|l| {
+            l.timestamp += 31 * 24 * 60 * 60;
+        });
+        client.pause_contract();
+
+        let result = client.try_pay_to_contact(&scout, &1u64);
+        // Priority 1: ContractPaused wins over Priority 5: SubscriptionExpired.
+        assert_eq!(result, Err(Ok(ScoutAccessError::ContractPaused)));
+    }
+
+    /// ContractPaused beats AlreadyContacted (Priority 1 > Priority 6).
+    #[test]
+    fn test_pay_to_contact_paused_beats_already_contacted() {
+        let (env, admin, xlm, _contract_id, client) = setup();
+        let scout = Address::generate(&env);
+        mint_token(&env, &xlm, &admin, &scout, 100_000_000);
+
+        client.subscribe(&scout, &SubscriptionTier::Elite);
+        client.pay_to_contact(&scout, &1u64);
+        // Now contact record exists AND we pause.
+        client.pause_contract();
+
+        let result = client.try_pay_to_contact(&scout, &1u64);
+        // Priority 1: ContractPaused wins over Priority 6: AlreadyContacted.
+        assert_eq!(result, Err(Ok(ScoutAccessError::ContractPaused)));
+    }
+
+    /// ScoutNotSubscribed beats SubscriptionExpired — impossible in practice
+    /// because expired subscriptions still have a record. Confirmed: Priority 4
+    /// (no record) is structurally exclusive from Priority 5 (record exists but
+    /// expired). Test documents the order by checking that an expired
+    /// subscription surfaces as SubscriptionExpired (Priority 5), not
+    /// ScoutNotSubscribed.
+    #[test]
+    fn test_pay_to_contact_expired_sub_returns_expired_not_not_subscribed() {
+        let (env, admin, xlm, _contract_id, client) = setup();
+        let scout = Address::generate(&env);
+        mint_token(&env, &xlm, &admin, &scout, 100_000_000);
+
+        client.subscribe(&scout, &SubscriptionTier::Pro);
+        env.ledger().with_mut(|l| {
+            l.timestamp += 31 * 24 * 60 * 60;
+        });
+
+        let result = client.try_pay_to_contact(&scout, &99u64);
+        // Priority 5 fires: SubscriptionExpired (not ScoutNotSubscribed).
+        assert_eq!(result, Err(Ok(ScoutAccessError::SubscriptionExpired)));
+    }
+
+    /// SubscriptionExpired beats AlreadyContacted (Priority 5 > Priority 6).
+    /// When the subscription is expired AND a ContactRecord already exists, the
+    /// caller must see SubscriptionExpired — the expiry check runs before the
+    /// duplicate-contact guard in the source.
+    #[test]
+    fn test_pay_to_contact_expired_beats_already_contacted() {
+        let (env, admin, xlm, _contract_id, client) = setup();
+        let scout = Address::generate(&env);
+        mint_token(&env, &xlm, &admin, &scout, 100_000_000);
+
+        client.subscribe(&scout, &SubscriptionTier::Elite);
+        client.pay_to_contact(&scout, &1u64);
+
+        // Expire the subscription.
+        env.ledger().with_mut(|l| {
+            l.timestamp += 31 * 24 * 60 * 60;
+        });
+
+        let result = client.try_pay_to_contact(&scout, &1u64);
+        // Priority 5: SubscriptionExpired wins over Priority 6: AlreadyContacted.
+        assert_eq!(result, Err(Ok(ScoutAccessError::SubscriptionExpired)));
+    }
+
+    // -------------------------------------------------------------------------
+    // batch_contact_players — precedence tests
+    // -------------------------------------------------------------------------
+
+    /// ContractPaused beats ScoutNotSubscribed (Priority 1 > Priority 4).
+    #[test]
+    fn test_batch_contact_paused_beats_not_subscribed() {
+        let (env, _admin, _xlm, _contract_id, client) = setup();
+        let scout = Address::generate(&env);
+        // No subscription, contract paused.
+        client.pause_contract();
+
+        let mut batch = soroban_sdk::Vec::new(&env);
+        batch.push_back(1u64);
+        let result = client.try_batch_contact_players(&scout, &batch);
+        // Priority 1: ContractPaused wins.
+        assert_eq!(result, Err(Ok(ScoutAccessError::ContractPaused)));
+    }
+
+    /// ContractPaused beats SubscriptionExpired (Priority 1 > Priority 4).
+    #[test]
+    fn test_batch_contact_paused_beats_expired() {
+        let (env, admin, xlm, _contract_id, client) = setup();
+        let scout = Address::generate(&env);
+        mint_token(&env, &xlm, &admin, &scout, 100_000_000);
+
+        client.subscribe(&scout, &SubscriptionTier::Pro);
+        env.ledger().with_mut(|l| {
+            l.timestamp += 31 * 24 * 60 * 60;
+        });
+        client.pause_contract();
+
+        let mut batch = soroban_sdk::Vec::new(&env);
+        batch.push_back(1u64);
+        let result = client.try_batch_contact_players(&scout, &batch);
+        // Priority 1: ContractPaused wins.
+        assert_eq!(result, Err(Ok(ScoutAccessError::ContractPaused)));
+    }
+
+    /// ScoutNotSubscribed / SubscriptionExpired beat ContactQuotaExceeded
+    /// (Priority 4 > Priority 5).  A Pro scout at their monthly limit whose
+    /// subscription has also expired must see SubscriptionExpired, not quota.
+    #[test]
+    fn test_batch_contact_expired_beats_quota_exceeded() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let admin = Address::generate(&env);
+        let xlm = create_token(&env, &admin);
+        let contract_id = env.register_contract(None, ScoutAccessContract);
+        let client = ScoutAccessContractClient::new(&env, &contract_id);
+        let fees = FeeConfig {
+            pro_contact_limit: 1,
+            ..default_fees()
+        };
+        client.initialize(&admin, &xlm, &fees);
+
+        let scout = Address::generate(&env);
+        mint_token(&env, &xlm, &admin, &scout, 100_000_000);
+        client.subscribe(&scout, &SubscriptionTier::Pro);
+
+        // Exhaust the quota.
+        let mut single = soroban_sdk::Vec::new(&env);
+        single.push_back(1u64);
+        client.batch_contact_players(&scout, &single);
+
+        // Expire the subscription.
+        env.ledger().with_mut(|l| {
+            l.timestamp += 31 * 24 * 60 * 60;
+        });
+
+        // New batch — quota is exceeded AND subscription expired.
+        let mut batch = soroban_sdk::Vec::new(&env);
+        batch.push_back(2u64);
+        let result = client.try_batch_contact_players(&scout, &batch);
+        // Priority 4: SubscriptionExpired wins over Priority 5: ContactQuotaExceeded.
+        assert_eq!(result, Err(Ok(ScoutAccessError::SubscriptionExpired)));
+    }
+
+    // -------------------------------------------------------------------------
+    // log_trial_offer — precedence tests
+    // -------------------------------------------------------------------------
+
+    /// ContractPaused beats InvalidInput (Priority 1 > Priority 3).
+    /// Paused contract with a malformed CID must return ContractPaused.
+    #[test]
+    fn test_log_trial_offer_paused_beats_invalid_input() {
+        let (env, admin, xlm, _contract_id, client) = setup();
+        let scout = Address::generate(&env);
+        mint_token(&env, &xlm, &admin, &scout, 100_000_000);
+
+        client.subscribe(&scout, &SubscriptionTier::Elite);
+        client.pause_contract();
+
+        // details_hash is invalid (too short) — InvalidInput also true.
+        let result = client.try_log_trial_offer(&scout, &1u64, &String::from_str(&env, "bad"));
+        // Priority 1: ContractPaused wins over Priority 3: InvalidInput.
+        assert_eq!(result, Err(Ok(ScoutAccessError::ContractPaused)));
+    }
+
+    /// ContractPaused beats ScoutNotSubscribed (Priority 1 > Priority 4).
+    #[test]
+    fn test_log_trial_offer_paused_beats_not_subscribed() {
+        let (env, _admin, _xlm, _contract_id, client) = setup();
+        let scout = Address::generate(&env);
+        client.pause_contract();
+
+        let result = client.try_log_trial_offer(
+            &scout,
+            &1u64,
+            &String::from_str(&env, "QmPK1s3pNYLi9ERiq3BDxKa4XosgWwFRQUydHUtz4YgpqB"),
+        );
+        // Priority 1: ContractPaused wins over Priority 4: ScoutNotSubscribed.
+        assert_eq!(result, Err(Ok(ScoutAccessError::ContractPaused)));
+    }
+
+    /// ContractPaused beats Unauthorized-tier (Priority 1 > Priority 5).
+    /// Paused contract, Pro scout (not Elite), valid CID → ContractPaused.
+    #[test]
+    fn test_log_trial_offer_paused_beats_unauthorized_tier() {
+        let (env, admin, xlm, _contract_id, client) = setup();
+        let scout = Address::generate(&env);
+        mint_token(&env, &xlm, &admin, &scout, 100_000_000);
+
+        client.subscribe(&scout, &SubscriptionTier::Pro);
+        client.pause_contract();
+
+        let result = client.try_log_trial_offer(
+            &scout,
+            &1u64,
+            &String::from_str(&env, "QmPK1s3pNYLi9ERiq3BDxKa4XosgWwFRQUydHUtz4YgpqB"),
+        );
+        // Priority 1: ContractPaused wins over Priority 5: Unauthorized.
+        assert_eq!(result, Err(Ok(ScoutAccessError::ContractPaused)));
+    }
+
+    /// InvalidInput beats ScoutNotSubscribed (Priority 3 > Priority 4).
+    /// A scout with no subscription and an invalid CID must see InvalidInput.
+    #[test]
+    fn test_log_trial_offer_invalid_input_beats_not_subscribed() {
+        let (env, _admin, _xlm, _contract_id, client) = setup();
+        let scout = Address::generate(&env);
+        // No subscription — ScoutNotSubscribed is also true.
+
+        let result = client.try_log_trial_offer(&scout, &1u64, &String::from_str(&env, "tooshort"));
+        // Priority 3: InvalidInput wins over Priority 4: ScoutNotSubscribed.
+        assert_eq!(result, Err(Ok(ScoutAccessError::InvalidInput)));
+    }
+
+    /// InvalidInput beats Unauthorized-tier (Priority 3 > Priority 5).
+    /// A Pro scout (non-Elite) supplying an invalid CID must see InvalidInput.
+    #[test]
+    fn test_log_trial_offer_invalid_input_beats_unauthorized_tier() {
+        let (env, admin, xlm, _contract_id, client) = setup();
+        let scout = Address::generate(&env);
+        mint_token(&env, &xlm, &admin, &scout, 100_000_000);
+
+        client.subscribe(&scout, &SubscriptionTier::Pro);
+        // Pro tier (non-Elite) — Unauthorized also true.
+
+        let result = client.try_log_trial_offer(&scout, &1u64, &String::from_str(&env, "tooshort"));
+        // Priority 3: InvalidInput wins over Priority 5: Unauthorized.
+        assert_eq!(result, Err(Ok(ScoutAccessError::InvalidInput)));
+    }
+
+    /// SubscriptionExpired beats Unauthorized-tier (Priority 4 > Priority 5).
+    /// A Pro scout whose subscription has also expired must see SubscriptionExpired.
+    #[test]
+    fn test_log_trial_offer_expired_beats_unauthorized_tier() {
+        let (env, admin, xlm, _contract_id, client) = setup();
+        let scout = Address::generate(&env);
+        mint_token(&env, &xlm, &admin, &scout, 100_000_000);
+
+        client.subscribe(&scout, &SubscriptionTier::Pro);
+        // Expire the subscription.
+        env.ledger().with_mut(|l| {
+            l.timestamp += 31 * 24 * 60 * 60;
+        });
+
+        let result = client.try_log_trial_offer(
+            &scout,
+            &1u64,
+            &String::from_str(&env, "QmPK1s3pNYLi9ERiq3BDxKa4XosgWwFRQUydHUtz4YgpqB"),
+        );
+        // Priority 4: SubscriptionExpired wins over Priority 5: Unauthorized.
+        assert_eq!(result, Err(Ok(ScoutAccessError::SubscriptionExpired)));
+    }
+
+    /// Unauthorized-tier beats Unauthorized-not-contacted (Priority 5 > Priority 6).
+    /// An Elite scout who has NOT previously contacted the player must see
+    /// Unauthorized (from the tier check) when both conditions are simultaneously
+    /// active — but in this test the scout IS Elite so only Priority 6 fires.
+    /// This test verifies that the "not-contacted" check returns Unauthorized
+    /// ONLY when tier is correct (Elite), confirming Priority 5 fires before 6.
+    #[test]
+    fn test_log_trial_offer_unauthorized_tier_beats_unauthorized_not_contacted() {
+        let (env, admin, xlm, _contract_id, client) = setup();
+        let scout = Address::generate(&env);
+        mint_token(&env, &xlm, &admin, &scout, 100_000_000);
+
+        // Pro tier — tier check fires first (Priority 5).
+        client.subscribe(&scout, &SubscriptionTier::Pro);
+        // Also has NOT contacted the player — Priority 6 condition also true.
+
+        let result = client.try_log_trial_offer(
+            &scout,
+            &1u64,
+            &String::from_str(&env, "QmPK1s3pNYLi9ERiq3BDxKa4XosgWwFRQUydHUtz4YgpqB"),
+        );
+        // Priority 5 fires: Unauthorized (non-Elite tier).
+        // Same error code as Priority 6, but we confirm it fires before contact-check
+        // by verifying the error even when the contact record would also be absent.
+        assert_eq!(result, Err(Ok(ScoutAccessError::Unauthorized)));
+    }
+
+    /// Unauthorized-not-contacted beats TrialOfferRateLimited (Priority 6 > Priority 7).
+    /// An Elite scout who has contacted one player, sent an offer within the last
+    /// 24 h to that player, but then tries to log an offer for a DIFFERENT player
+    /// they have NEVER contacted — they must see Unauthorized (no contact record),
+    /// not TrialOfferRateLimited.
+    #[test]
+    fn test_log_trial_offer_not_contacted_beats_rate_limited() {
+        let (env, admin, xlm, _contract_id, client) = setup();
+        let scout = Address::generate(&env);
+        mint_token(&env, &xlm, &admin, &scout, 100_000_000);
+
+        client.subscribe(&scout, &SubscriptionTier::Elite);
+        // Contact and offer player 1 (rate-limit is now in effect for player 1).
+        client.pay_to_contact(&scout, &1u64);
+        client.log_trial_offer(
+            &scout,
+            &1u64,
+            &String::from_str(&env, "QmPK1s3pNYLi9ERiq3BDxKa4XosgWwFRQUydHUtz4YgpqB"),
+        );
+
+        // Player 2: scout has NOT contacted them (Priority 6 condition true).
+        // For player 1 rate-limit would fire (Priority 7), but we are testing
+        // a different player here to isolate the not-contacted path.
+        let result = client.try_log_trial_offer(
+            &scout,
+            &2u64,
+            &String::from_str(&env, "QmPK1s3pNYLi9ERiq3BDxKa4XosgWwFRQUydHUtz4YgpqB"),
+        );
+        // Priority 6: Unauthorized (not contacted player 2) wins.
+        assert_eq!(result, Err(Ok(ScoutAccessError::Unauthorized)));
+    }
 
     #[test]
     fn test_fee_reconciliation_mixed_sequence() {

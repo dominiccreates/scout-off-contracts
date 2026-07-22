@@ -9,12 +9,13 @@ use types::{
     ProgressLevel, ScoutProfile, StoredPlayerProfile,
 };
 
+use scoutchain_shared_types::require_admin;
 use soroban_sdk::{contract, contractimpl, Address, Env, String, Vec};
 
 // Generated client stub for the progress contract — used to resolve a player's
 // current level at read time.  `level` is never stored in this contract.
 mod progress_contract {
-    use scoutchain_shared_types::{require_admin, ProgressLevel};
+    use scoutchain_shared_types::ProgressLevel;
     use soroban_sdk::{contractclient, Env};
 
     #[contractclient(name = "Client")]
@@ -83,6 +84,52 @@ impl RegistrationContract {
         env.storage().instance().set(&DataKey::PlayerCounter, &0u64);
         env.storage().instance().set(&DataKey::ScoutCounter, &0u64);
         Ok(())
+    }
+
+    /// Propose a replacement administrator. The current admin remains active
+    /// until the proposed address calls `accept_admin`.
+    pub fn propose_admin(env: Env, new_admin: Address) -> Result<(), ScoutChainError> {
+        let old_admin = require_admin(&env, &DataKey::Admin, ADMIN_BUMP_LEDGERS)?;
+        env.storage()
+            .persistent()
+            .set(&DataKey::PendingAdmin, &new_admin);
+        env.storage().persistent().extend_ttl(
+            &DataKey::PendingAdmin,
+            ADMIN_BUMP_LEDGERS,
+            ADMIN_BUMP_LEDGERS,
+        );
+        events::admin_transfer_proposed(&env, &old_admin, &new_admin);
+        Ok(())
+    }
+
+    /// Accept a pending admin transfer. Only the proposed address can accept.
+    pub fn accept_admin(env: Env) -> Result<(), ScoutChainError> {
+        let old_admin: Address = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Admin)
+            .ok_or(ScoutChainError::NotInitialized)?;
+        let new_admin: Address = env
+            .storage()
+            .persistent()
+            .get(&DataKey::PendingAdmin)
+            .ok_or(ScoutChainError::PendingAdminNotSet)?;
+        new_admin.require_auth();
+        env.storage().persistent().set(&DataKey::Admin, &new_admin);
+        env.storage().persistent().extend_ttl(
+            &DataKey::Admin,
+            ADMIN_BUMP_LEDGERS,
+            ADMIN_BUMP_LEDGERS,
+        );
+        env.storage().persistent().remove(&DataKey::PendingAdmin);
+        events::admin_transferred(&env, &old_admin, &new_admin);
+        Ok(())
+    }
+
+    /// Deprecated alias for `propose_admin`; this no longer transfers control
+    /// immediately. The proposed address must still call `accept_admin`.
+    pub fn transfer_admin(env: Env, new_admin: Address) -> Result<(), ScoutChainError> {
+        Self::propose_admin(env, new_admin)
     }
 
     pub fn pause_contract(env: Env) -> Result<(), ScoutChainError> {
@@ -320,6 +367,7 @@ impl RegistrationContract {
         env.storage()
             .persistent()
             .set(&DataKey::PlayerDeactivated(player_id), &true);
+        events::player_deactivated(&env, player_id);
         Ok(())
     }
 
@@ -334,6 +382,7 @@ impl RegistrationContract {
         env.storage()
             .persistent()
             .remove(&DataKey::PlayerDeactivated(player_id));
+        events::player_reactivated(&env, player_id);
         Ok(())
     }
 
@@ -838,7 +887,10 @@ impl RegistrationContract {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use soroban_sdk::{testutils::Address as _, vec, Env, String};
+    use soroban_sdk::{
+        testutils::{Address as _, Events, MockAuth, MockAuthInvoke},
+        vec, Env, IntoVal, String, Symbol,
+    };
 
     fn setup() -> (Env, RegistrationContractClient<'static>) {
         let env = Env::default();
@@ -863,6 +915,102 @@ mod tests {
         let admin = Address::generate(&env);
         client.initialize(&admin);
         assert!(client.health().initialized);
+    }
+
+    #[test]
+    fn test_admin_transfer_propose_replace_and_accept() {
+        let (env, client) = setup();
+        let old_admin = Address::generate(&env);
+        let stale_admin = Address::generate(&env);
+        let new_admin = Address::generate(&env);
+        client.initialize(&old_admin);
+
+        client.propose_admin(&stale_admin);
+        assert_eq!(
+            env.events().all(),
+            vec![
+                &env,
+                (
+                    client.address.clone(),
+                    (Symbol::new(&env, events::ADMIN_TRANSFER_PROPOSED),).into_val(&env),
+                    (old_admin.clone(), stale_admin).into_val(&env),
+                )
+            ]
+        );
+
+        // The current admin remains fully functional while a proposal is pending.
+        client.pause_contract();
+        client.unpause_contract();
+
+        // A new proposal replaces the stale pending address.
+        client.propose_admin(&new_admin);
+        env.as_contract(&client.address, || {
+            assert_eq!(
+                env.storage()
+                    .persistent()
+                    .get::<DataKey, Address>(&DataKey::Admin),
+                Some(old_admin.clone())
+            );
+            assert_eq!(
+                env.storage()
+                    .persistent()
+                    .get::<DataKey, Address>(&DataKey::PendingAdmin),
+                Some(new_admin.clone())
+            );
+        });
+
+        env.mock_auths(&[MockAuth {
+            address: &new_admin,
+            invoke: &MockAuthInvoke {
+                contract: &client.address,
+                fn_name: "accept_admin",
+                args: vec![&env],
+                sub_invokes: &[],
+            },
+        }]);
+        client.accept_admin();
+        assert_eq!(
+            env.events().all(),
+            vec![
+                &env,
+                (
+                    client.address.clone(),
+                    (Symbol::new(&env, events::ADMIN_TRANSFERRED),).into_val(&env),
+                    (old_admin, new_admin.clone()).into_val(&env),
+                )
+            ]
+        );
+        env.as_contract(&client.address, || {
+            assert_eq!(
+                env.storage()
+                    .persistent()
+                    .get::<DataKey, Address>(&DataKey::Admin),
+                Some(new_admin)
+            );
+            assert!(!env.storage().persistent().has(&DataKey::PendingAdmin));
+        });
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_third_party_cannot_accept_admin() {
+        let (env, client) = setup();
+        let old_admin = Address::generate(&env);
+        let pending_admin = Address::generate(&env);
+        let third_party = Address::generate(&env);
+        client.initialize(&old_admin);
+        client.propose_admin(&pending_admin);
+
+        env.mock_auths(&[MockAuth {
+            address: &third_party,
+            invoke: &MockAuthInvoke {
+                contract: &client.address,
+                fn_name: "accept_admin",
+                args: vec![&env],
+                sub_invokes: &[],
+            },
+        }]);
+        client.accept_admin();
     }
 
     #[test]
@@ -1831,6 +1979,70 @@ mod tests {
             result_reactivated.profiles.get(0).unwrap().player_id,
             player_id
         );
+    }
+
+    // -------------------------------------------------------------------------
+    // Issue #647: player_deactivated and player_reactivated event emission
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn test_deactivate_player_emits_event() {
+        use soroban_sdk::testutils::Events;
+        use soroban_sdk::IntoVal;
+        let (env, client) = setup();
+        let admin = Address::generate(&env);
+        client.initialize(&admin);
+
+        let wallet = Address::generate(&env);
+        let hashes = vec![&env, String::from_str(&env, "QmTest")];
+        let player_id = client.register_player(&wallet, &dummy_vitals(&env), &hashes);
+
+        // Clear any events from registration so we only inspect deactivation events.
+        let _ = env.events().all();
+
+        client.deactivate_player(&player_id);
+
+        let events = env.events().all();
+        assert_eq!(events.len(), 1, "expected exactly one event from deactivate_player");
+
+        let (topics, data) = events.get(0).unwrap();
+        // Topic[0] should be the symbol "player_deactivated"
+        assert_eq!(
+            topics.get(0).unwrap(),
+            soroban_sdk::Symbol::new(&env, "player_deactivated").into_val(&env),
+        );
+        // Data should be the player_id
+        assert_eq!(data, player_id.into_val(&env));
+    }
+
+    #[test]
+    fn test_reactivate_player_emits_event() {
+        use soroban_sdk::testutils::Events;
+        use soroban_sdk::IntoVal;
+        let (env, client) = setup();
+        let admin = Address::generate(&env);
+        client.initialize(&admin);
+
+        let wallet = Address::generate(&env);
+        let hashes = vec![&env, String::from_str(&env, "QmTest")];
+        let player_id = client.register_player(&wallet, &dummy_vitals(&env), &hashes);
+
+        client.deactivate_player(&player_id);
+
+        // Clear events up to this point.
+        let _ = env.events().all();
+
+        client.reactivate_player(&player_id);
+
+        let events = env.events().all();
+        assert_eq!(events.len(), 1, "expected exactly one event from reactivate_player");
+
+        let (topics, data) = events.get(0).unwrap();
+        assert_eq!(
+            topics.get(0).unwrap(),
+            soroban_sdk::Symbol::new(&env, "player_reactivated").into_val(&env),
+        );
+        assert_eq!(data, player_id.into_val(&env));
     }
 
     // -------------------------------------------------------------------------

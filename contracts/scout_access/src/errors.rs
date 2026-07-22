@@ -62,6 +62,10 @@ pub enum ScoutAccessError {
     Overflow = 10,
     /// Cross-contract `advance_level` failed.
     ProgressCallFailed = 14,
+
+    // ── Admin transfer ──
+    /// `accept_admin` called before an admin transfer was proposed.
+    PendingAdminNotSet = 21,
 }
 
 impl AdminError for ScoutAccessError {

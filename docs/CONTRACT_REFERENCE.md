@@ -18,6 +18,7 @@ That keeps the command copy-paste-runnable in a standard `bash`/`zsh` shell.
 - [Shared Types](#shared-types)
 - [Error Codes](#error-codes)
 - [Events](#events)
+- [Design Discussion: Check-Ordering Follow-ups](#design-discussion-check-ordering-follow-ups)
 - [Glossary](GLOSSARY.md)
 
 ---
@@ -47,6 +48,48 @@ One-time contract setup. Must be called before any other function.
 stellar contract invoke --id $REGISTRATION_CONTRACT_ID \
   -- initialize --admin $ADMIN_ADDRESS
 ```
+
+---
+
+#### `propose_admin(new_admin: Address) -> Result<(), ScoutChainError>`
+
+Store or replace a pending admin proposal. The current admin retains all
+privileges until the proposed address accepts.
+
+| | |
+|---|---|
+| **Auth** | Current admin must sign |
+| **Errors** | `NotInitialized` |
+| **Emits** | `admin_transfer_proposed` with `(old_admin, new_admin)` |
+
+```bash
+stellar contract invoke --id $REGISTRATION_CONTRACT_ID \
+  -- propose_admin --new_admin $NEW_ADMIN_ADDRESS
+```
+
+---
+
+#### `accept_admin() -> Result<(), ScoutChainError>`
+
+Finalize the pending transfer. The stored pending admin must sign, proving
+control of the address. Acceptance updates the admin and clears the proposal.
+
+| | |
+|---|---|
+| **Auth** | Pending admin must sign |
+| **Errors** | `NotInitialized` · `PendingAdminNotSet` |
+| **Emits** | `admin_transferred` with `(old_admin, new_admin)` |
+
+```bash
+stellar contract invoke --id $REGISTRATION_CONTRACT_ID -- accept_admin
+```
+
+---
+
+#### `transfer_admin(new_admin: Address) -> Result<(), ScoutChainError>`
+
+Deprecated compatibility alias for `propose_admin`. It does not immediately
+change the admin; the proposed address must still call `accept_admin`.
 
 ---
 
@@ -114,6 +157,7 @@ stellar contract invoke --id $REGISTRATION_CONTRACT_ID \
 Hide a player from `filter_players` results without erasing their profile
 (soft-delete). Sets the `PlayerDeactivated` flag; the player's data and
 `player_id` remain intact and can be restored with `reactivate_player`.
+Emits a `player_deactivated` event on success.
 
 | | |
 |---|---|
@@ -131,6 +175,7 @@ stellar contract invoke --id $REGISTRATION_CONTRACT_ID \
 
 Reverse a prior `deactivate_player` call. Clears the `PlayerDeactivated`
 flag, making the player visible in `filter_players` results again.
+Emits a `player_reactivated` event on success.
 
 | | |
 |---|---|
@@ -446,6 +491,48 @@ One-time contract setup.
 stellar contract invoke --id $VERIFICATION_CONTRACT_ID \
   -- initialize --admin $ADMIN_ADDRESS
 ```
+
+---
+
+#### `propose_admin(new_admin: Address) -> Result<(), VerificationError>`
+
+Store or replace a pending admin proposal. The current admin retains all
+privileges until the proposed address accepts.
+
+| | |
+|---|---|
+| **Auth** | Current admin must sign |
+| **Errors** | `NotInitialized` |
+| **Emits** | `admin_transfer_proposed` with `(old_admin, new_admin)` |
+
+```bash
+stellar contract invoke --id $VERIFICATION_CONTRACT_ID \
+  -- propose_admin --new_admin $NEW_ADMIN_ADDRESS
+```
+
+---
+
+#### `accept_admin() -> Result<(), VerificationError>`
+
+Finalize the pending transfer. The stored pending admin must sign, proving
+control of the address. Acceptance updates the admin and clears the proposal.
+
+| | |
+|---|---|
+| **Auth** | Pending admin must sign |
+| **Errors** | `NotInitialized` · `PendingAdminNotSet` |
+| **Emits** | `admin_transferred` with `(old_admin, new_admin)` |
+
+```bash
+stellar contract invoke --id $VERIFICATION_CONTRACT_ID -- accept_admin
+```
+
+---
+
+#### `transfer_admin(new_admin: Address) -> Result<(), VerificationError>`
+
+Deprecated compatibility alias for `propose_admin`. It does not immediately
+change the admin; the proposed address must still call `accept_admin`.
 
 ---
 
@@ -1019,6 +1106,8 @@ stellar contract invoke --id $VERIFICATION_CONTRACT_ID -- version
 | Event | Topics | Data | Description |
 |-------|--------|------|-------------|
 | `contract_initialized` | event_name | admin (Address) | Emitted on successful initialization |
+| `admin_transfer_proposed` | event_name | old_admin (Address), new_admin (Address) | Admin replacement proposed |
+| `admin_transferred` | event_name | old_admin (Address), new_admin (Address) | Pending admin accepts control |
 | `milestone_approved` | event_name, validator_address, milestone_index (u32) | player_id (u64), description (String), evidence_hash (String) | Validator confirms a player achievement |
 | `validator_registered` | event_name | validator_address | New validator onboarded |
 | `validator_revoked` | event_name | validator_address, reason (String) | Validator deactivated |
@@ -1055,36 +1144,45 @@ stellar contract invoke --id $PROGRESS_CONTRACT_ID \
 
 ---
 
-#### `transfer_admin(new_admin: Address) -> Result<(), ProgressError>`
+#### `propose_admin(new_admin: Address) -> Result<(), ProgressError>`
 
-Transfer admin rights to `new_admin`. The current admin loses **all** privileged
-access immediately and irreversibly — there is no undo. The old admin address
-is no longer authorised to call any admin-only function after this transaction
-confirms.
-
-> ⚠️ **Irreversible**: Once transferred, only `new_admin` can call
-> `transfer_admin` again to change ownership. If `new_admin` is a lost or
-> inaccessible key, admin access to this contract is permanently lost. Verify
-> the new address before invoking.
-
-**Parameters**
-
-| Parameter | Type | Description |
-|-----------|------|-------------|
-| `new_admin` | `Address` | Stellar address that will become the new contract admin |
-
-**Return type**: `Result<(), ProgressError>` — `Ok(())` on success.
+Store or replace a pending admin proposal. The current admin retains all
+privileges until the proposed address accepts.
 
 | | |
 |---|---|
-| **Auth** | Current admin must sign (`require_auth` on the stored admin address) |
-| **Errors** | `NotInitialized` if the contract has not been initialised |
-| **Emits** | `admin_transferred` — topics: `(Symbol("admin_transferred"),)`, data: `(old_admin: Address, new_admin: Address)` |
+| **Auth** | Current admin must sign |
+| **Errors** | `NotInitialized` |
+| **Emits** | `admin_transfer_proposed` with `(old_admin, new_admin)` |
 
 ```bash
 stellar contract invoke --id $PROGRESS_CONTRACT_ID \
-  -- transfer_admin --new_admin $NEW_ADMIN_ADDRESS
+  -- propose_admin --new_admin $NEW_ADMIN_ADDRESS
 ```
+
+---
+
+#### `accept_admin() -> Result<(), ProgressError>`
+
+Finalize the transfer. The stored pending admin must sign, proving control of
+the address. Acceptance updates the admin and clears the proposal.
+
+| | |
+|---|---|
+| **Auth** | Pending admin must sign |
+| **Errors** | `NotInitialized` · `PendingAdminNotSet` |
+| **Emits** | `admin_transferred` with `(old_admin, new_admin)` |
+
+```bash
+stellar contract invoke --id $PROGRESS_CONTRACT_ID -- accept_admin
+```
+
+---
+
+#### `transfer_admin(new_admin: Address) -> Result<(), ProgressError>`
+
+Deprecated compatibility alias for `propose_admin`. It creates or replaces a
+proposal and does not immediately change the admin.
 
 ---
 
@@ -1377,6 +1475,7 @@ stellar contract invoke --id $PROGRESS_CONTRACT_ID -- version
 |-------|--------|------|-------------|
 | `progress_updated` | event_name, updated_by (Address) | player_id (u64), old_level, new_level | Player advances one tier |
 | `player_level_reset` | event_name | player_id (u64), old_level, new_level | Admin resets a player's level |
+| `admin_transfer_proposed` | event_name | old_admin (Address), new_admin (Address) | Admin replacement proposed |
 | `admin_transferred` | event_name | old_admin (Address), new_admin (Address) | Admin rights rotated |
 
 ---
@@ -1409,7 +1508,13 @@ greater than zero; either function returns `InvalidInput` otherwise.
 **Validation rules:**
 - Every `i128` fee field must be > 0 (zero or negative → `InvalidInput` error code 15).
 - `sub_duration_secs` must be > 0 (zero → `InvalidInput`).
-- There is no enforced upper bound, but values larger than the XLM supply
+- `pro_contact_limit` must be > 0 (zero → `InvalidInput`). This field caps the
+  number of unique players a **Pro-tier** scout may contact within a single
+  subscription period. Once the limit is reached, `pay_to_contact` returns
+  `ProContactLimitReached` (code 20) for that scout until their subscription
+  renews. **Elite-tier scouts are exempt** from this limit and may contact any
+  number of players regardless of `pro_contact_limit`.
+- There is no enforced upper bound on fee fields, but values larger than the XLM supply
   (≈ 500 000 000 XLM = 5 × 10¹⁵ stroops) will cause `Overflow` errors at fee
   settlement time.
 
@@ -1439,24 +1544,50 @@ stellar contract invoke --id $SCOUT_ACCESS_CONTRACT_ID \
   -- initialize \
   --admin $ADMIN_ADDRESS \
   --xlm_token $XLM_TOKEN_ADDRESS \
-  --fee_config '{"contact_fee_stroops":100000,"basic_sub_stroops":1000000,"pro_sub_stroops":3000000,"elite_sub_stroops":7000000,"sub_duration_secs":2592000}'
+  --fee_config '{"contact_fee_stroops":100000,"basic_sub_stroops":1000000,"pro_sub_stroops":3000000,"elite_sub_stroops":7000000,"sub_duration_secs":2592000,"pro_contact_limit":10}'
+```
+
+---
+
+#### `propose_admin(new_admin: Address) -> Result<(), ScoutAccessError>`
+
+Store or replace a pending admin proposal. The current admin retains all
+privileges until the proposed address accepts.
+
+| | |
+|---|---|
+| **Auth** | Current admin must sign |
+| **Errors** | `NotInitialized` |
+| **Emits** | `admin_transfer_proposed` with `(old_admin, new_admin)` |
+
+```bash
+stellar contract invoke --id $SCOUT_ACCESS_CONTRACT_ID \
+  -- propose_admin --new_admin $NEW_ADMIN_ADDRESS
+```
+
+---
+
+#### `accept_admin() -> Result<(), ScoutAccessError>`
+
+Finalize the transfer. The stored pending admin must sign, proving control of
+the address. Acceptance updates the admin and clears the proposal.
+
+| | |
+|---|---|
+| **Auth** | Pending admin must sign |
+| **Errors** | `NotInitialized` · `PendingAdminNotSet` |
+| **Emits** | `admin_transferred` with `(old_admin, new_admin)` |
+
+```bash
+stellar contract invoke --id $SCOUT_ACCESS_CONTRACT_ID -- accept_admin
 ```
 
 ---
 
 #### `transfer_admin(new_admin: Address) -> Result<(), ScoutAccessError>`
 
-Transfer admin rights to a new address immediately.
-
-| | |
-|---|---|
-| **Auth** | Current admin must sign |
-| **Errors** | `NotInitialized` · `Unauthorized` |
-
-```bash
-stellar contract invoke --id $SCOUT_ACCESS_CONTRACT_ID \
-  -- transfer_admin --new_admin $NEW_ADMIN_ADDRESS
-```
+Deprecated compatibility alias for `propose_admin`. It creates or replaces a
+proposal and does not immediately change the admin.
 
 ---
 
@@ -1490,7 +1621,7 @@ Adjust subscription and contact fee rates. Same validation rules as
 ```bash
 stellar contract invoke --id $SCOUT_ACCESS_CONTRACT_ID \
   -- update_fee_config \
-  --fee_config '{"contact_fee_stroops":200000,"basic_sub_stroops":2000000,"pro_sub_stroops":5000000,"elite_sub_stroops":10000000,"sub_duration_secs":2592000}'
+  --fee_config '{"contact_fee_stroops":200000,"basic_sub_stroops":2000000,"pro_sub_stroops":5000000,"elite_sub_stroops":10000000,"sub_duration_secs":2592000,"pro_contact_limit":20}'
 ```
 
 ---
@@ -1547,7 +1678,24 @@ tier while a subscription is still active are rejected.
 | | |
 |---|---|
 | **Auth** | `scout` must sign and pre-approve the XLM transfer |
-| **Errors** | `NotInitialized` · `ContractPaused` · `SubscriptionDowngradeNotAllowed` · `UpgradeTooSoon` · `Overflow` |
+| **Errors** | `ContractPaused` · `NotInitialized` · `SubscriptionDowngradeNotAllowed` · `UpgradeTooSoon` · `Overflow` |
+
+**Check precedence order** (when multiple error conditions are simultaneously
+true, the first matching check in this list wins):
+
+| Priority | Condition checked | Error returned |
+|----------|-------------------|---------------|
+| 1 | Contract is paused | `ContractPaused` (3) |
+| 2 | Contract is not initialized | `NotInitialized` (2) |
+| 3 | Scout auth | panic / host auth error |
+| 4 | Active subscription exists AND requested tier rank < current tier rank | `SubscriptionDowngradeNotAllowed` (12) |
+| 5 | Active subscription exists AND `now < subscribed_at + 3600 s` | `UpgradeTooSoon` (17) |
+| 6 | Fee accumulation arithmetic overflows | `Overflow` (10) |
+| 7 | `expires_at` calculation overflows | `Overflow` (10) |
+
+> **Design note**: Checks 4 and 5 share the same outer `if` block — only one
+> can fire per call. A downgrade attempt is evaluated before the timing guard,
+> so a simultaneous downgrade-too-soon scenario returns `SubscriptionDowngradeNotAllowed`.
 
 ```bash
 stellar contract invoke --id $SCOUT_ACCESS_CONTRACT_ID \
@@ -1563,10 +1711,43 @@ stellar contract invoke --id $SCOUT_ACCESS_CONTRACT_ID \
 Pay a micro-fee to unlock a player's contact details. Scout must have an active
 (non-expired) subscription.
 
+**Pro-tier contact limit**: Pro-tier scouts are capped at `pro_contact_limit`
+unique player contacts per subscription period (configured in `FeeConfig`).
+Once the limit is reached, further `pay_to_contact` calls return
+`ProContactLimitReached` (code 20) until the subscription renews. Elite-tier
+scouts are **exempt** from this limit.
+
 | | |
 |---|---|
 | **Auth** | `scout` must sign |
-| **Errors** | `ContractPaused` · `ScoutNotSubscribed` · `SubscriptionExpired` · `AlreadyContacted` · `Overflow` |
+| **Errors** | `ContractPaused` · `NotInitialized` · `ScoutNotSubscribed` · `SubscriptionExpired` · `AlreadyContacted` · `ProContactLimitReached` · `Overflow` |
+
+**Check precedence order** (when multiple error conditions are simultaneously
+true, the first matching check in this list wins):
+
+| Priority | Condition checked | Error returned |
+|----------|-------------------|---------------|
+| 1 | Contract is paused | `ContractPaused` (3) |
+| 2 | Contract is not initialized | `NotInitialized` (2) |
+| 3 | Scout auth | panic / host auth error |
+| 4 | No `Subscription` record exists for the scout | `ScoutNotSubscribed` (6) |
+| 5 | `Subscription` record exists but `expires_at < now` | `SubscriptionExpired` (7) |
+| 6 | `ContactRecord` already exists for `(player_id, scout)` | `AlreadyContacted` (8) |
+| 7 | Scout is Pro tier AND `current_count >= pro_contact_limit` | `ProContactLimitReached` (20) |
+| 8 | Fee accumulation arithmetic overflows | `Overflow` (10) |
+
+> **Design note — paused vs unsubscribed (Priority 1 vs 4)**: when the
+> contract is paused *and* the scout has no subscription, the caller sees
+> `ContractPaused`, not `ScoutNotSubscribed`. A frontend can safely treat
+> `ContractPaused` as "service unavailable, try again later" without
+> needing to check subscription state. This ordering is intentional and
+> consistent with every other state-changing function in this contract.
+
+> **Design note — expired vs already-contacted (Priority 5 vs 6)**: an
+> expired subscription takes precedence over a duplicate-contact guard.
+> This is the more actionable error for the user ("renew your subscription")
+> and prevents leaking whether a contact record exists to an unsubscribed
+> caller.
 
 ```bash
 stellar contract invoke --id $SCOUT_ACCESS_CONTRACT_ID \
@@ -1589,7 +1770,30 @@ Scout must have an active (non-expired) subscription.
 | | |
 |---|---|
 | **Auth** | `scout` must sign |
-| **Errors** | `ContractPaused` · `NotInitialized` · `ScoutNotSubscribed` · `SubscriptionExpired` · `Overflow` |
+| **Errors** | `ContractPaused` · `NotInitialized` · `ScoutNotSubscribed` · `SubscriptionExpired` · `ContactQuotaExceeded` · `Overflow` |
+
+**Check precedence order** (when multiple error conditions are simultaneously
+true, the first matching check in this list wins):
+
+| Priority | Condition checked | Error returned |
+|----------|-------------------|---------------|
+| 1 | Contract is paused | `ContractPaused` (3) |
+| 2 | Contract is not initialized | `NotInitialized` (2) |
+| 3 | Scout auth | panic / host auth error |
+| 4 | No active subscription (no record or expired) | `ScoutNotSubscribed` (6) or `SubscriptionExpired` (7) |
+| 5 | Pro-tier contact quota would be exceeded by the batch | `ContactQuotaExceeded` (18) |
+| 6 | `total_fee` multiplication overflows | `Overflow` (10) |
+
+> **Design note — quota check before payment (Priority 5 before fee transfer)**:
+> the quota check runs before the XLM transfer. This means no partial charge
+> occurs when a batch would exceed the Pro monthly limit — the call fails cleanly
+> and the scout can retry with a smaller batch.
+
+> **Design note — `ContactQuotaExceeded` vs `ProContactLimitReached`**: this
+> function uses `ContactQuotaExceeded` (18) via the `check_pro_contact_quota_with_count`
+> helper, while `pay_to_contact` uses `ProContactLimitReached` (20) via a
+> separate inline check. They enforce the same limit but return different error
+> codes depending on the call path. Callers should handle both.
 
 ```bash
 stellar contract invoke --id $SCOUT_ACCESS_CONTRACT_ID \
@@ -1610,7 +1814,49 @@ trial offer index.
 | | |
 |---|---|
 | **Auth** | `scout` must sign (Elite subscription required) |
-| **Errors** | `ContractPaused` · `ScoutNotSubscribed` · `SubscriptionExpired` · `Unauthorized` (non-Elite tier) · `Overflow` · `ProgressCallFailed` |
+| **Errors** | `ContractPaused` · `InvalidInput` · `ScoutNotSubscribed` · `SubscriptionExpired` · `Unauthorized` · `TrialOfferRateLimited` · `Overflow` · `ProgressCallFailed` |
+
+**Check precedence order** (when multiple error conditions are simultaneously
+true, the first matching check in this list wins):
+
+| Priority | Condition checked | Error returned |
+|----------|-------------------|---------------|
+| 1 | Contract is paused | `ContractPaused` (3) |
+| 2 | Scout auth | panic / host auth error |
+| 3 | `details_hash` fails CID validation | `InvalidInput` (15) |
+| 4 | No active subscription (no record or expired) | `ScoutNotSubscribed` (6) or `SubscriptionExpired` (7) |
+| 5 | Subscription tier is not Elite | `Unauthorized` (4) |
+| 6 | No `ContactRecord` exists for `(player_id, scout)` | `Unauthorized` (4) |
+| 7 | Rate limit: within 24 h cooldown for `(scout, player_id)` | `TrialOfferRateLimited` (19) |
+| 8 | Trial counter increment overflows | `Overflow` (10) |
+| 9 | Cross-contract `advance_level` fails for a reason other than `AlreadyAtMaxLevel` | `ProgressCallFailed` (14) |
+
+> ⚠️ **Design note — missing `require_initialized` check**: `log_trial_offer`
+> does **not** call `require_initialized`, unlike `subscribe`, `pay_to_contact`,
+> and `batch_contact_players`, which all call it immediately after
+> `require_not_paused`. This is an asymmetry in the current implementation.
+> In practice the function cannot succeed on an uninitialized contract (the
+> subscription lookup returns `ScoutNotSubscribed` before any write occurs), but
+> callers should not rely on this indirect guard — a dedicated initialized check
+> would be safer and consistent. This should be addressed in a follow-up
+> contract upgrade. See [Design Discussion §1](#1-log_trial_offer-is-missing-require_initialized).
+
+> **Design note — `InvalidInput` before subscription check (Priority 3 before 4)**:
+> `details_hash` is validated before the subscription is looked up. This means
+> a scout with an expired subscription who also supplies a malformed CID sees
+> `InvalidInput`, not `SubscriptionExpired`. Prefer validating inputs as early
+> as possible; this ordering is correct.
+
+> **Design note — both `Unauthorized` codes share priority 5 and 6**: the
+> tier check and the previous-contact check both return `Unauthorized` (4)
+> but are separate runtime conditions. If a caller has a non-Elite subscription
+> *and* has never contacted the player, they will only ever see `Unauthorized`
+> from the tier check (priority 5 fires first).
+
+> **Design note — `TrialOfferRateLimited` vs `Unauthorized` ordering
+> (Priority 7 after 5–6)**: the rate-limit check occurs after authorization.
+> A non-Elite scout cannot trigger `TrialOfferRateLimited`; they will always
+> see `Unauthorized` first.
 
 ```bash
 stellar contract invoke --id $SCOUT_ACCESS_CONTRACT_ID \
@@ -1924,6 +2170,7 @@ stellar contract invoke --id $SCOUT_ACCESS_CONTRACT_ID -- version
 | `trial_offer_logged` | event_name, scout (Address) | player_id (u64) | Elite scout records a trial offer |
 | `fees_withdrawn` | event_name, to (Address) | amount (i128) | Admin withdraws accumulated fees |
 | `subscription_refunded` | event_name, scout (Address) | amount (i128) | Admin issues emergency refund to a scout |
+| `admin_transfer_proposed` | event_name | (old_admin: Address, new_admin: Address) | Admin replacement proposed |
 | `admin_transferred` | event_name | (old_admin: Address, new_admin: Address) | Admin rights rotated |
 | `contract_paused` | event_name | admin (Address) | Circuit breaker engaged |
 | `contract_unpaused` | event_name | admin (Address) | Circuit breaker released |
@@ -2162,6 +2409,7 @@ pub struct TrialOffer {
 | 11 | `Overflow` | Counter or fee arithmetic overflowed |
 | 12 | `ScoutNotFound` | Invalid `scout_id` |
 | 13 | `InvalidInput` | Field too long, bad hash count, or empty value |
+| 14 | `PendingAdminNotSet` | `accept_admin` called without a pending proposal |
 
 ### `VerificationError` (verification contract)
 
@@ -2185,6 +2433,7 @@ pub struct TrialOffer {
 | 16 | `DuplicateEvidence` | Evidence hash has already been used in a prior `approve_milestone` call |
 | 17 | `MilestoneLimitExceeded` | Validator has already approved 5 milestones for this player |
 | 18 | `DisputeAlreadyResolved` | Dispute was already resolved and cannot be resolved again |
+| 19 | `PendingAdminNotSet` | `accept_admin` called without a pending proposal |
 
 ### `ProgressError` (progress contract)
 
@@ -2199,6 +2448,7 @@ pub struct TrialOffer {
 | 7 | `PlayerNotFound` | History index out of range |
 | 8 | `Overflow` | History counter overflowed |
 | 9 | `RegistrationCallFailed` | Cross-contract call to registration contract failed when syncing player level |
+| 10 | `PendingAdminNotSet` | `accept_admin` called without a pending proposal |
 
 ### `ScoutAccessError` (scout_access contract)
 
@@ -2220,9 +2470,9 @@ pub struct TrialOffer {
 | 15 | `InvalidInput` | Zero or negative fee field in `FeeConfig` |
 | 16 | `NoFeesToWithdraw` | No accumulated fees available to withdraw |
 | 17 | `UpgradeTooSoon` | Subscribe called before minimum interval elapsed |
-| 18 | `ContactQuotaExceeded` | Pro-tier scout exceeded monthly contact limit |
-| 19 | `TrialOfferRateLimited` | Trial offer sent to the same player within the 24h cooldown window |
-| 20 | `ProContactLimitReached` | Pro-tier scout reached the contact limit for the current subscription period |
+| 18 | `ContactQuotaExceeded` | Scout has hit the platform-wide contact quota for the current period (applies to all tiers; enforced by an admin-configurable platform cap, distinct from the per-Pro-scout `pro_contact_limit`) |
+| 19 | `TrialOfferRateLimited` | Elite scout sent a trial offer to the same player within the cooldown window — the offer was already logged; retry after the cooldown expires |
+| 20 | `ProContactLimitReached` | Pro-tier scout has reached the `pro_contact_limit` contacts for the current subscription period (Elite scouts are exempt from this limit) |
 
 ---
 
@@ -2234,9 +2484,13 @@ pub struct TrialOffer {
 | `scout_registered` | registration | New scout profile created |
 | `profile_updated` | registration | Player updates IPFS content hashes |
 | `player_deregistered` | registration | Admin removes a player profile |
+| `player_deactivated` | registration | Admin soft-hides a player from filter results |
+| `player_reactivated` | registration | Admin restores a soft-hidden player to filter results |
 | `scout_verified` | registration | Admin verifies a scout |
 | `player_level_synced` | registration | Progress contract syncs a player's level |
 | `contract_initialized` | verification | Contract initialized |
+| `admin_transfer_proposed` | all four contracts | Current admin proposes a replacement |
+| `admin_transferred` | all four contracts | Pending admin accepts control |
 | `milestone_approved` | verification | Validator confirms a player achievement |
 | `validator_registered` | verification | New validator onboarded |
 | `validator_revoked` | verification | Validator deactivated |
@@ -2245,9 +2499,137 @@ pub struct TrialOffer {
 | `contract_unpaused` | verification / scout_access | Circuit breaker released |
 | `progress_updated` | progress | Player advances one level |
 | `player_level_reset` | progress | Admin resets a player's level |
-| `admin_transferred` | progress / scout_access | Admin rights rotated |
 | `scout_subscribed` | scout_access | Scout purchases a subscription |
 | `player_contacted` | scout_access | Scout unlocks player contact details |
 | `trial_offer_logged` | scout_access | Elite scout records a trial offer |
 | `fees_withdrawn` | scout_access | Admin withdraws accumulated fees |
 | `subscription_refunded` | scout_access | Admin issues emergency refund to a scout |
+
+---
+
+## Design Discussion: Check-Ordering Follow-ups
+
+This section collects ordering decisions that were identified during the
+check-precedence audit and flagged as candidates for review in a future
+contract upgrade. None of these represent bugs in the current release —
+all of them have documented, tested behavior — but some may produce a less
+helpful error than a different ordering would. Each item describes the
+current behavior, why it may be suboptimal, and the recommended change.
+
+---
+
+### 1. `log_trial_offer` is missing `require_initialized`
+
+**Current behavior**: `log_trial_offer` does not call `require_initialized`,
+unlike every other state-changing function in this contract (`subscribe`,
+`pay_to_contact`, and `batch_contact_players` all call it immediately after
+`require_not_paused`).
+
+**Why this matters**: On an uninitialized contract, `log_trial_offer` does not
+return `NotInitialized`. Instead it falls through to the subscription lookup,
+which returns `ScoutNotSubscribed` because no storage has been written. This
+means an uninitialized contract appears to a caller as if the scout simply
+has no subscription — an indirect, misleading error rather than the definitive
+"contract not set up" signal.
+
+**When it can surface**: Only on a freshly deployed contract that has never had
+`initialize` called. In production the initialize-then-use deployment flow
+makes this unlikely, but a mis-wired deployment or a test environment that
+calls `log_trial_offer` before `initialize` would observe `ScoutNotSubscribed`
+instead of `NotInitialized`.
+
+**Recommended fix**: Add `Self::require_initialized(&env)?;` immediately after
+`Self::require_not_paused(&env)?;` in `log_trial_offer`, matching the ordering
+of the other three state-changing functions. This is a one-line change, is
+backward-compatible (it makes an already-failing path fail with a more specific
+error), and requires no storage or API changes.
+
+```rust
+// Proposed change in log_trial_offer (contracts/scout_access/src/lib.rs):
+Self::bump_instance_ttl(&env);
+Self::require_not_paused(&env)?;
+Self::require_initialized(&env)?;   // ← add this line
+scout.require_auth();
+```
+
+**Risk**: None. On an initialized contract `require_initialized` always
+succeeds, so existing callers are unaffected.
+
+---
+
+### 2. `pay_to_contact`: `AlreadyContacted` checked before `ProContactLimitReached` (Priority 6 before 7)
+
+**Current behavior**: The duplicate-contact guard (`AlreadyContacted`) runs
+before the Pro monthly quota check (`ProContactLimitReached`). A scout who
+is simultaneously at their quota limit *and* has already contacted the same
+player sees `AlreadyContacted`.
+
+**Why this may be suboptimal**: `AlreadyContacted` (code 8) is the correct
+terminal error for a genuine duplicate contact attempt, so the ordering is
+correct for the pure-duplicate case. However, the quota check at Priority 7
+fires *only* for new contacts — if a scout at quota tries to contact a new
+player they will correctly see `ProContactLimitReached`. The current ordering
+is therefore only relevant when both the quota and a duplicate exist for the
+same `(scout, player_id)` pair. In that case `AlreadyContacted` is the more
+actionable response ("you already unlocked this player") and the quota is
+irrelevant. The current ordering is defensible.
+
+**Conclusion**: No change recommended. The ordering is correct and the
+"worse" scenario (quota masking duplicate) does not arise in practice because
+the quota check only runs for *new* contacts.
+
+---
+
+### 3. `batch_contact_players` vs `pay_to_contact`: different error codes for the same quota limit
+
+**Current behavior**: `batch_contact_players` returns `ContactQuotaExceeded`
+(18) when the Pro monthly limit would be exceeded, while `pay_to_contact`
+returns `ProContactLimitReached` (20) for the same underlying limit. Both
+enforce `pro_contact_limit` from `FeeConfig` but via different helper
+functions.
+
+**Why this matters for callers**: A frontend must handle two different error
+codes to display the same user-facing message ("You have reached your monthly
+contact limit, please upgrade to Elite or wait for your subscription to
+renew"). This is an accidental inconsistency introduced when `batch_contact_players`
+was added.
+
+**Recommended fix**: Unify on one error code. The preferred candidate is
+`ProContactLimitReached` (20) because it is the more descriptive name and was
+introduced specifically for this error class. `ContactQuotaExceeded` (18) can
+be deprecated and its slot reserved (see the code-13 reservation pattern
+already in use in `errors.rs`). This requires a contract upgrade and a
+coordinated frontend change.
+
+**Impact**: Any caller or frontend that currently checks for
+`ContactQuotaExceeded` (18) on `batch_contact_players` responses would need to
+be updated after the upgrade.
+
+---
+
+### 4. `subscribe`: UpgradeTooSoon fires even for a same-tier renewal
+
+**Current behavior**: the minimum 1-hour interval between `subscribe` calls
+(the `UpgradeTooSoon` guard) applies to any call while the subscription is
+active, including a renewal at exactly the same tier. A scout attempting to
+renew their Pro subscription 30 minutes after purchasing it sees `UpgradeTooSoon`.
+
+**Why this may be suboptimal**: The guard was introduced to prevent the
+race-condition / double-charge scenario on rapid upgrades. A same-tier renewal
+carries no race-condition risk because the tier does not change and the fee
+is deterministic. Applying the interval guard to same-tier renewals is a
+conservative over-application that can confuse users ("I'm just renewing,
+why is it saying too soon?").
+
+**Recommended fix**: Only apply the `UpgradeTooSoon` guard when the requested
+tier is a strict upgrade (i.e., `tier_rank(&tier) > tier_rank(&existing.tier)`).
+Same-tier renewals while active should only be rate-limited by the expiry
+logic, not the upgrade interval. This is a small conditional change within the
+existing `if now <= existing.expires_at` block.
+
+**Risk**: Low. Removing the interval guard for same-tier renewals means two
+identical-tier subscriptions *could* be purchased in rapid succession (paying
+double). However, this is self-penalizing (the scout pays twice for no
+benefit) and the new subscription simply overwrites the old one. The
+`refund_subscription` admin function already handles the accidental-double-charge
+recovery path.
