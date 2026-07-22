@@ -1415,6 +1415,12 @@ greater than zero; either function returns `InvalidInput` otherwise.
 
 See the [Glossary](GLOSSARY.md#feeconfig) for a plain-language description of each field.
 
+> [!NOTE]
+> **Historical Fee Configs & Auditability**
+> The `scout_access` contract only stores the *current* `FeeConfig` on-chain (retrievable via `get_fee_config`). There is no on-chain fee configuration history. Due to the very low frequency of administrative fee adjustments, an on-chain history vector is not implemented to avoid unnecessary storage costs and complexity.
+>
+> Instead, historical fee configurations must be reconstructed off-chain by replaying `fee_config_updated` event logs. The off-chain indexer database maintains a complete audit trail in the `fee_config_history` table (see [001_initial_schema.sql](file:///c:/Users/USER/scout-off-contracts/migrations/001_initial_schema.sql#L135-L148)) which serves as the actual source of truth for auditing historical transactions (e.g. verifying that a contact fee or subscription payment matched the rate in effect at that time).
+
 ### Functions
 
 ---
@@ -1481,6 +1487,10 @@ stellar contract invoke --id $SCOUT_ACCESS_CONTRACT_ID \
 
 Adjust subscription and contact fee rates. Same validation rules as
 `initialize`.
+
+> [!NOTE]
+> **Historical Fee Configs & Auditability**
+> Adjusting the fee config emits the `fee_config_updated` event log containing both the old and new `FeeConfig` values. Since the contract does not maintain an on-chain fee history vector, historical fee rates must be reconstructed off-chain by replaying these events into the indexer's `fee_config_history` table (see [001_initial_schema.sql](file:///c:/Users/USER/scout-off-contracts/migrations/001_initial_schema.sql#L135-L148)).
 
 | | |
 |---|---|
@@ -2120,6 +2130,11 @@ pub struct FeeConfig {
     pub sub_duration_secs: u64,      // duration in seconds, must be > 0 (not a Unix timestamp)
 }
 ```
+
+> [!NOTE]
+> **Historical Fee Configs & Auditability**
+> The `scout_access` contract only stores the *current* `FeeConfig` on-chain. Historical fee configurations are event-log-only and must be reconstructed off-chain by replaying `fee_config_updated` events into the indexer's `fee_config_history` table (defined in [001_initial_schema.sql](file:///c:/Users/USER/scout-off-contracts/migrations/001_initial_schema.sql#L135-L148)).
+
 
 ### `ProContactPeriod`
 
