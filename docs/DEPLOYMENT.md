@@ -2,6 +2,9 @@
 
 ## Prerequisites
 
+<!-- Note: XLM token address source of truth -->
+> **Note:** The `xlm_token_address` values in `config/mainnet.json` and `config/testnet.json` (and the corresponding entry in `.env.example`) are sourced from Stellar's official SAC registry. The team member responsible for verifying and updating these addresses before each deployment is the **Release Engineer**. Ensure the addresses match the latest SAC documentation before deploying.
+
 - Rust + `wasm32-unknown-unknown` target: `rustup target add wasm32-unknown-unknown`
 - Stellar CLI: https://developers.stellar.org/docs/tools/developer-tools/cli/install-stellar-cli
 - A funded Stellar keypair for deployment
