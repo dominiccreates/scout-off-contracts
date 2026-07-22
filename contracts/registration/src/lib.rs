@@ -668,7 +668,6 @@ impl RegistrationContract {
         Ok(())
     }
 
-
     fn load_stored_player(
         env: &Env,
         player_id: u64,

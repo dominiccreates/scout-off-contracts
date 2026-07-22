@@ -1044,7 +1044,6 @@ impl ScoutAccessContract {
         }
     }
 
-
     fn require_initialized(env: &Env) -> Result<(), ScoutAccessError> {
         if !env
             .storage()
@@ -1068,7 +1067,6 @@ impl ScoutAccessContract {
         }
         Ok(())
     }
-
 
     fn get_token(env: &Env) -> Result<Address, ScoutAccessError> {
         env.storage()

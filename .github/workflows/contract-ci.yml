@@ -34,7 +34,7 @@ jobs:
           key: ${{ runner.os }}-cargo-wasm32v1-${{ hashFiles('**/Cargo.lock') }}
 
       - name: Pin ed25519-dalek to fix soroban-env-host trait bound error
-        run: cargo update -p ed25519-dalek@3.0.0 --precise 3.0.0-rc.0
+        run: cargo update -p ed25519-dalek@3.0.0 --precise 3.0.0-rc.0 || true
 
       - name: Run tests
         run: cargo test --workspace

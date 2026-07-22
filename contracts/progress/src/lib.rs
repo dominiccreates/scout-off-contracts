@@ -5,8 +5,8 @@ mod events;
 mod types;
 
 use errors::ProgressError;
-use types::{DataKey, ProgressEntry};
 use scoutchain_shared_types::{require_admin, ContractHealth, ProgressLevel};
+use types::{DataKey, ProgressEntry};
 
 use soroban_sdk::{contract, contractimpl, Address, Env, String, Vec};
 
@@ -573,7 +573,6 @@ impl ProgressContract {
         }
         Ok(())
     }
-
 }
 
 // =============================================================================

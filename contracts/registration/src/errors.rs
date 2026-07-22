@@ -1,5 +1,5 @@
-use soroban_sdk::contracterror;
 use scoutchain_shared_types::AdminError;
+use soroban_sdk::contracterror;
 
 /// Append-only: do not renumber existing variants. See docs/CONTRIBUTING.md.
 #[contracterror]

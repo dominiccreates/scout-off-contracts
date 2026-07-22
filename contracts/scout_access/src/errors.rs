@@ -1,5 +1,5 @@
-use soroban_sdk::contracterror;
 use scoutchain_shared_types::AdminError;
+use soroban_sdk::contracterror;
 
 /// Errors for the ScoutAccess contract.
 ///
