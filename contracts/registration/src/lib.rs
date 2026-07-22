@@ -2003,16 +2003,17 @@ mod tests {
         client.deactivate_player(&player_id);
 
         let events = env.events().all();
-        assert_eq!(events.len(), 1, "expected exactly one event from deactivate_player");
-
-        let (topics, data) = events.get(0).unwrap();
-        // Topic[0] should be the symbol "player_deactivated"
         assert_eq!(
-            topics.get(0).unwrap(),
-            soroban_sdk::Symbol::new(&env, "player_deactivated").into_val(&env),
+            events,
+            soroban_sdk::vec![
+                &env,
+                (
+                    client.address.clone(),
+                    (soroban_sdk::Symbol::new(&env, "player_deactivated"),).into_val(&env),
+                    player_id.into_val(&env)
+                )
+            ]
         );
-        // Data should be the player_id
-        assert_eq!(data, player_id.into_val(&env));
     }
 
     #[test]
@@ -2035,14 +2036,17 @@ mod tests {
         client.reactivate_player(&player_id);
 
         let events = env.events().all();
-        assert_eq!(events.len(), 1, "expected exactly one event from reactivate_player");
-
-        let (topics, data) = events.get(0).unwrap();
         assert_eq!(
-            topics.get(0).unwrap(),
-            soroban_sdk::Symbol::new(&env, "player_reactivated").into_val(&env),
+            events,
+            soroban_sdk::vec![
+                &env,
+                (
+                    client.address.clone(),
+                    (soroban_sdk::Symbol::new(&env, "player_reactivated"),).into_val(&env),
+                    player_id.into_val(&env)
+                )
+            ]
         );
-        assert_eq!(data, player_id.into_val(&env));
     }
 
     // -------------------------------------------------------------------------
