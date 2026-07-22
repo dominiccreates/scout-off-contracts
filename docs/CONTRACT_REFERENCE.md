@@ -574,7 +574,7 @@ storage entries and swaps it for `new_wallet` in the validator registry.
 | | |
 |---|---|
 | **Auth** | Admin must sign |
-| **Errors** | `ValidatorNotFound` (old_wallet not registered) · `ValidatorAlreadyRegistered` (new_wallet already registered) · `Unauthorized` |
+| **Errors** | `ValidatorNotFound` (old_wallet not registered) · `ValidatorAlreadyRegistered` (new_wallet already registered, including the same-address case where `old_wallet == new_wallet`) · `Unauthorized` |
 
 ```bash
 stellar contract invoke --id $VERIFICATION_CONTRACT_ID \

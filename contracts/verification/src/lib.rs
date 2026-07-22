@@ -2427,4 +2427,88 @@ mod tests {
         let validators_after = client.get_validators();
         assert_eq!(validators_after.len(), 1);
     }
+
+    #[test]
+    fn test_transfer_validator_succeeds() {
+        let (env, client) = setup();
+        let admin = Address::generate(&env);
+        client.initialize(&admin);
+
+        let old_wallet = Address::generate(&env);
+        let credentials = String::from_str(&env, "UEFA A License");
+        client.register_validator(&old_wallet, &credentials);
+
+        // Record a milestone to verify milestones get migrated
+        client.approve_milestone(
+            &old_wallet,
+            &1u64,
+            &String::from_str(&env, "Scored 5 goals"),
+            &String::from_str(&env, VALID_CID_V0),
+        );
+        assert_eq!(client.get_validator_milestone_count(&old_wallet), 1);
+
+        let new_wallet = Address::generate(&env);
+        client.transfer_validator(&old_wallet, &new_wallet);
+
+        // Verify old wallet is no longer active
+        assert!(!client.is_active_validator(&old_wallet));
+        assert!(client.try_get_validator(&old_wallet).is_err());
+
+        // Verify new wallet is active and credentials are correct
+        assert!(client.is_active_validator(&new_wallet));
+        let stored_validator = client.get_validator(&new_wallet);
+        assert_eq!(stored_validator.wallet, new_wallet);
+        assert_eq!(stored_validator.credentials, credentials);
+
+        // Verify milestone count migrated
+        assert_eq!(client.get_validator_milestone_count(&new_wallet), 1);
+        assert_eq!(client.get_validator_milestone_count(&old_wallet), 0);
+
+        // Verify ValidatorVector contains new_wallet and not old_wallet
+        let validators = client.get_validators();
+        assert_eq!(validators.len(), 1);
+        assert_eq!(validators.get(0).unwrap(), new_wallet);
+    }
+
+    #[test]
+    fn test_transfer_validator_same_address() {
+        let (env, client) = setup();
+        let admin = Address::generate(&env);
+        client.initialize(&admin);
+
+        let wallet = Address::generate(&env);
+        let credentials = String::from_str(&env, "UEFA B License");
+        client.register_validator(&wallet, &credentials);
+
+        // Record a milestone to verify milestone count remains intact
+        client.approve_milestone(
+            &wallet,
+            &1u64,
+            &String::from_str(&env, "Scored 5 goals"),
+            &String::from_str(&env, VALID_CID_V0),
+        );
+        assert_eq!(client.get_validator_milestone_count(&wallet), 1);
+
+        // Call transfer_validator with identical old_wallet and new_wallet
+        // This should return Err(Ok(VerificationError::ValidatorAlreadyRegistered))
+        let result = client.try_transfer_validator(&wallet, &wallet);
+        assert_eq!(
+            result,
+            Err(Ok(VerificationError::ValidatorAlreadyRegistered))
+        );
+
+        // Verify validator is still active and registered
+        assert!(client.is_active_validator(&wallet));
+        let stored_validator = client.get_validator(&wallet);
+        assert_eq!(stored_validator.wallet, wallet);
+        assert_eq!(stored_validator.credentials, credentials);
+
+        // Verify milestone count remains intact
+        assert_eq!(client.get_validator_milestone_count(&wallet), 1);
+
+        // Verify ValidatorVector length remains 1 and contains wallet
+        let validators = client.get_validators();
+        assert_eq!(validators.len(), 1);
+        assert_eq!(validators.get(0).unwrap(), wallet);
+    }
 }
