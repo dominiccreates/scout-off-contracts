@@ -36,6 +36,9 @@ The `wasm32v1-none` target (not the older `wasm32-unknown-unknown`) is required 
 rustup show
 rustup component add clippy rustfmt
 cp .env.example .env
+
+# (Optional) Install local git pre-push hook to run fmt, clippy, and docs checks
+git config core.hooksPath scripts/git-hooks
 ```
 
 ## Before opening a PR
@@ -44,6 +47,7 @@ cp .env.example .env
 cargo test --workspace          # all tests must pass
 cargo clippy --workspace        # zero warnings
 cargo fmt --all -- --check      # formatting must be clean
+bash scripts/check-docs.sh      # documentation completeness check
 ```
 
 ## CI checks
